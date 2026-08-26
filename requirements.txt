@@ -1,0 +1,18 @@
+# Browser automation
+playwright>=1.48.0
+
+# Configuration
+pydantic-settings>=2.5.0
+python-dotenv>=1.0.0
+
+# LLM
+google-genai>=1.0.0
+
+# HTML processing
+html2text>=2024.2.26
+
+# HTTP (for webhooks)
+httpx>=0.27.0
+
+# CLI
+rich>=13.9.0
