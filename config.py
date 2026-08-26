@@ -17,9 +17,25 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
 
     # ── iCollege ──────────────────────────────────────
+    # The landing/info page (WordPress) — NOT the actual D2L instance
     icollege_url: str = Field(
         default="https://icollege.gsu.edu",
-        description="Base URL for the iCollege (D2L Brightspace) portal.",
+        description="iCollege landing page URL (used for reference only).",
+    )
+
+    # The actual D2L Brightspace LMS instance
+    d2l_base_url: str = Field(
+        default="https://gastate.view.usg.edu",
+        description="Base URL for the D2L Brightspace LMS instance.",
+    )
+
+    # SAML SSO login entry point
+    saml_login_url: str = Field(
+        default=(
+            "https://gastate.view.usg.edu/d2l/lp/auth/saml/initiate-login"
+            "?entityId=https://idp.gsu.edu/idp/shibboleth"
+        ),
+        description="SAML SSO login URL for initiating authentication.",
     )
 
     # ── LLM ───────────────────────────────────────────

@@ -111,7 +111,7 @@ def scrape_announcements_api(
 
     try:
         # Navigate to the course homepage
-        base_url = settings.icollege_url.rstrip("/")
+        base_url = settings.d2l_base_url.rstrip("/")
         course_home = f"{base_url}/d2l/home/{course.org_unit_id}"
         page.goto(course_home, wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle", timeout=20_000)
@@ -165,7 +165,7 @@ def scrape_announcements_dom(
     the HTML directly. Less reliable than API interception.
     """
     announcements: list[Announcement] = []
-    base_url = settings.icollege_url.rstrip("/")
+    base_url = settings.d2l_base_url.rstrip("/")
 
     # Navigate to the news page
     news_url = f"{base_url}/d2l/lms/news/main.d2l?ou={course.org_unit_id}"

@@ -1,17 +1,18 @@
-"""Dashboard parser — extracts enrolled courses from iCollege.
+"""Dashboard parser — extracts enrolled courses from D2L Brightspace.
 
-Parses the D2L Brightspace "My Courses" widget to extract course
-names, org unit IDs, and URLs. Supports filtering by semester and
-user-specified course name substrings.
+Parses the D2L Brightspace "My Courses" widget at gastate.view.usg.edu
+to extract course names, org unit IDs, and URLs. Supports filtering by
+semester and user-specified course name substrings.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, Response
 from rich.console import Console
 from rich.table import Table
 
@@ -78,62 +79,117 @@ def _parse_course_name(raw_name: str) -> tuple[str, str, str]:
 
 
 def fetch_courses(page: Page) -> list[Course]:
-    """Navigate to the dashboard and extract all enrolled courses.
+    """Navigate to the D2L dashboard and extract all enrolled courses.
 
     Uses multiple strategies to find courses:
-    1. D2L "My Courses" widget course cards
-    2. Enrollment API response interception
+    1. Network interception of D2L enrollment API calls
+    2. D2L "My Courses" widget course card links
     3. Fallback: any link matching /d2l/home/<id>
     """
     courses: list[Course] = []
     seen_ids: set[str] = set()
+    captured_enrollments: list[dict] = []
 
-    # Navigate to the homepage (session should already be validated)
-    base_url = settings.icollege_url.rstrip("/")
-    page.goto(f"{base_url}/d2l/home", wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=20_000)
+    base_url = settings.d2l_base_url.rstrip("/")
+
+    # ── Strategy 0: Intercept enrollment API calls ────────────────
+    def handle_response(response: Response) -> None:
+        """Capture D2L enrollment API responses."""
+        url = response.url
+        if "/enrollments/" in url and response.ok:
+            try:
+                data = response.json()
+                if isinstance(data, dict) and "Items" in data:
+                    captured_enrollments.extend(data["Items"])
+                elif isinstance(data, list):
+                    captured_enrollments.extend(data)
+            except Exception:
+                pass
+
+    page.on("response", handle_response)
+
+    try:
+        # Navigate to the D2L homepage
+        page.goto(f"{base_url}/d2l/home", wait_until="domcontentloaded")
+        page.wait_for_load_state("networkidle", timeout=20_000)
+    finally:
+        page.remove_listener("response", handle_response)
+
+    # Parse captured enrollment API data
+    if captured_enrollments:
+        console.print(
+            f"[dim]Captured {len(captured_enrollments)} enrollment(s) via API[/dim]"
+        )
+        for item in captured_enrollments:
+            org_info = item.get("OrgUnit", {})
+            org_id = str(org_info.get("Id", ""))
+            if not org_id or org_id in seen_ids:
+                continue
+
+            raw_name = org_info.get("Name", f"Course {org_id}")
+            org_type = org_info.get("Type", {}).get("Name", "")
+
+            # Filter to only course offerings (not groups, departments, etc.)
+            if org_type and org_type.lower() not in [
+                "course offering", "course", ""
+            ]:
+                continue
+
+            name, code, semester = _parse_course_name(raw_name)
+            course_url = f"{base_url}/d2l/home/{org_id}"
+
+            courses.append(
+                Course(
+                    name=name,
+                    org_unit_id=org_id,
+                    url=course_url,
+                    semester=semester,
+                    code=code,
+                )
+            )
+            seen_ids.add(org_id)
 
     # ── Strategy 1: D2L course card links ─────────────────────────
-    # Look for links that point to course homepages
-    course_links = page.query_selector_all('a[href*="/d2l/home/"]')
+    if not courses:
+        course_links = page.query_selector_all('a[href*="/d2l/home/"]')
 
-    for link in course_links:
-        href = link.get_attribute("href") or ""
-        org_id = _extract_org_unit_id(href)
-        if not org_id or org_id in seen_ids:
-            continue
+        for link in course_links:
+            href = link.get_attribute("href") or ""
+            org_id = _extract_org_unit_id(href)
+            if not org_id or org_id in seen_ids:
+                continue
 
-        # Get the link text as the course name
-        raw_name = (link.inner_text() or "").strip()
-        if not raw_name or len(raw_name) < 3:
-            # Try parent element for the name
-            parent = link.query_selector("xpath=..")
-            if parent:
-                raw_name = (parent.inner_text() or "").strip()
+            # Get the link text as the course name
+            raw_name = (link.inner_text() or "").strip()
+            if not raw_name or len(raw_name) < 3:
+                # Try parent element for the name
+                parent = link.query_selector("xpath=..")
+                if parent:
+                    raw_name = (parent.inner_text() or "").strip()
 
-        if not raw_name or len(raw_name) < 3:
-            raw_name = f"Course {org_id}"
+            if not raw_name or len(raw_name) < 3:
+                raw_name = f"Course {org_id}"
 
-        name, code, semester = _parse_course_name(raw_name)
+            name, code, semester = _parse_course_name(raw_name)
 
-        # Build the full URL
-        full_url = href if href.startswith("http") else f"{base_url}{href}"
+            # Build the full URL
+            full_url = href if href.startswith("http") else f"{base_url}{href}"
 
-        courses.append(
-            Course(
-                name=name,
-                org_unit_id=org_id,
-                url=full_url,
-                semester=semester,
-                code=code,
+            courses.append(
+                Course(
+                    name=name,
+                    org_unit_id=org_id,
+                    url=full_url,
+                    semester=semester,
+                    code=code,
+                )
             )
-        )
-        seen_ids.add(org_id)
+            seen_ids.add(org_id)
 
     # ── Strategy 2: Fallback — broader link search ────────────────
     if not courses:
         console.print(
-            "[yellow]⚠ No courses found via course cards, "
+            "[yellow]⚠ No courses found via API or course cards, "
             "trying broader link search...[/yellow]"
         )
         all_links = page.query_selector_all("a")
@@ -160,6 +216,49 @@ def fetch_courses(page: Page) -> list[Course]:
                 )
             )
             seen_ids.add(org_id)
+
+    # ── Strategy 3: Direct API call ───────────────────────────────
+    if not courses:
+        console.print(
+            "[yellow]⚠ Trying direct enrollment API call...[/yellow]"
+        )
+        # Try multiple API versions
+        for version in ["1.47", "1.43", "1.28"]:
+            api_url = (
+                f"{base_url}/d2l/api/lp/{version}/enrollments/myenrollments/"
+                "?sortBy=OrgUnitName&isActive=true"
+            )
+            try:
+                response = page.goto(api_url, wait_until="domcontentloaded")
+                if response and response.ok:
+                    body_text = page.inner_text("body")
+                    data = json.loads(body_text)
+                    items = data.get("Items", data if isinstance(data, list) else [])
+                    for item in items:
+                        org_info = item.get("OrgUnit", item)
+                        org_id = str(org_info.get("Id", ""))
+                        if not org_id or org_id in seen_ids:
+                            continue
+                        raw_name = org_info.get("Name", f"Course {org_id}")
+                        name, code, semester = _parse_course_name(raw_name)
+                        courses.append(
+                            Course(
+                                name=name,
+                                org_unit_id=org_id,
+                                url=f"{base_url}/d2l/home/{org_id}",
+                                semester=semester,
+                                code=code,
+                            )
+                        )
+                        seen_ids.add(org_id)
+                    if courses:
+                        console.print(
+                            f"[dim]Found {len(courses)} course(s) via "
+                            f"API v{version}[/dim]"
+                        )
+                        break
+            except Exception:
+                continue
 
     console.print(f"[dim]Found {len(courses)} enrolled course(s)[/dim]")
     return courses
