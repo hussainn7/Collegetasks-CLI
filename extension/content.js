@@ -21,18 +21,42 @@ function querySelectorAllShadows(selector, el = document.body) {
 // --- Feature 2: Hide Trash Classes ---
 
 function initHideClasses() {
+  // Inject global Unhide button if not exists
+  if (!document.getElementById('icollege-unhide-btn')) {
+    const unhideContainer = document.createElement('div');
+    unhideContainer.id = 'icollege-unhide-btn';
+    unhideContainer.style.cssText = 'text-align: center; margin-top: 15px; margin-bottom: 15px; width: 100%;';
+    
+    const unhideBtn = document.createElement('a');
+    unhideBtn.innerText = 'Unhide all hidden courses';
+    unhideBtn.style.cssText = 'color: #6366f1; cursor: pointer; font-size: 13px; text-decoration: underline;';
+    unhideBtn.onclick = () => {
+      chrome.storage.local.set({ hiddenCourses: [] }, () => {
+        alert("All courses unhidden! Please refresh the page.");
+        window.location.reload();
+      });
+    };
+    unhideContainer.appendChild(unhideBtn);
+    
+    // Try to place it after the "My Courses" widget or in the main page
+    const mainContent = document.querySelector('.d2l-page-main') || document.body;
+    mainContent.appendChild(unhideContainer);
+  }
+
   chrome.storage.local.get({ hiddenCourses: [] }, (data) => {
     const hiddenCourses = new Set(data.hiddenCourses);
     
     setInterval(() => {
       // Find course links by piercing shadow DOM
-      // We look for any link pointing to a course homepage
       const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
       
       links.forEach(link => {
-        // Find the container for this link. In D2L, it's often d2l-enrollment-card
-        // or a generic parent element wrapping the image.
         let card = link.closest('d2l-enrollment-card, d2l-card, .vui-card, .d2l-course-banner-container') || link.parentElement;
+        
+        // Sometimes the link itself is the overlay! So let's attach to its parent if it's an overlay
+        if (card === link) {
+           card = link.parentElement;
+        }
         
         if (card.hasAttribute('data-hide-injected')) return;
         card.setAttribute('data-hide-injected', 'true');
@@ -56,7 +80,11 @@ function initHideClasses() {
           });
         };
         
-        card.style.position = 'relative'; 
+        // Ensure card has relative positioning to hold the absolute button
+        if (window.getComputedStyle(card).position === 'static') {
+            card.style.position = 'relative'; 
+        }
+        
         card.appendChild(hideBtn);
       });
     }, 2000);
