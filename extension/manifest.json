@@ -6,6 +6,9 @@
   "permissions": [
     "storage"
   ],
+  "host_permissions": [
+    "https://gastate.view.usg.edu/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "iCollege Organizer Settings"

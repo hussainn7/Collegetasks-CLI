@@ -71,14 +71,22 @@ function initHideClasses() {
         const hideBtn = document.createElement('button');
         hideBtn.innerText = '🙈 Hide';
         hideBtn.className = 'icollege-hide-btn';
-        hideBtn.onclick = (e) => {
+        
+        // Use capture phase to intercept clicks before the link catches them
+        hideBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
           hiddenCourses.add(courseId);
           chrome.storage.local.set({ hiddenCourses: Array.from(hiddenCourses) }, () => {
             card.style.display = 'none';
           });
-        };
+        }, true);
+        
+        // Also prevent mousedown navigation
+        hideBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }, true);
         
         // Ensure card has relative positioning to hold the absolute button
         if (window.getComputedStyle(card).position === 'static') {
@@ -132,13 +140,16 @@ async function injectWhatsDueUI() {
   
   let html = `
     <div class="whats-due-header">
-      <h2>📅 What's Due</h2>
+      <h2 style="cursor: pointer; display: flex; align-items: center;" id="icollege-collapse-toggle">
+        📅 What's Due <span id="icollege-collapse-icon" style="margin-left: 8px; font-size: 14px;">▼</span>
+      </h2>
       <div>
         <button id="icollege-scan-btn" class="calendar-btn" style="background: #10b981; margin-right: 8px;">Scan Announcements 🔍</button>
         <button id="icollege-calendar-sync-btn" class="calendar-btn">Sync to Google Calendar ✨</button>
       </div>
     </div>
-    <ul class="whats-due-list">
+    <div id="icollege-whats-due-body">
+      <ul class="whats-due-list">
   `;
   
   if (deadlines.length === 0) {
@@ -169,6 +180,7 @@ async function injectWhatsDueUI() {
     <div id="icollege-scanner-logs" style="margin-top: 15px; max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 11px; color: #555; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; display: none;">
       <div><em>Scanner idle.</em></div>
     </div>
+    </div> <!-- End of body -->
   `;
   
   widget.innerHTML = html;
@@ -184,13 +196,42 @@ async function injectWhatsDueUI() {
     generateAndDownloadICS(deadlines);
   });
   
+  // Collapse toggle logic
+  document.getElementById('icollege-collapse-toggle').addEventListener('click', () => {
+    const body = document.getElementById('icollege-whats-due-body');
+    const icon = document.getElementById('icollege-collapse-icon');
+    if (body.style.display === 'none') {
+      body.style.display = 'block';
+      icon.innerText = '▼';
+    } else {
+      body.style.display = 'none';
+      icon.innerText = '▶';
+    }
+  });
+  
   document.getElementById('icollege-scan-btn').addEventListener('click', () => {
     const logContainer = document.getElementById('icollege-scanner-logs');
     logContainer.style.display = 'block';
     logContainer.innerHTML = '<div><em>Starting scan...</em></div>';
     
+    // Scrape active courses from dashboard
+    const coursesToScan = [];
+    const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
+    links.forEach(link => {
+      const match = link.getAttribute('href').match(/\/d2l\/home\/(\d+)/);
+      if (match) {
+        // Try to find course text by looking at elements inside the link or parent
+        const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
+        const courseName = rawText.split('\n')[0] || `Course ${match[1]}`;
+        // Ensure we don't push duplicates
+        if (!coursesToScan.find(c => c.id === match[1])) {
+          coursesToScan.push({ id: match[1], name: courseName });
+        }
+      }
+    });
+
     // Send message to background script to trigger manual scan
-    chrome.runtime.sendMessage({ action: 'scan_announcements' });
+    chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan });
   });
 }
 

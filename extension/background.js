@@ -13,33 +13,46 @@ function sendLog(msg) {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'scan_announcements') {
-    runScanner().catch(err => sendLog("[Scanner] Error: " + err.message));
+    runScanner(request.courses || []).catch(err => sendLog("[Scanner] Error: " + err.message));
     sendResponse({ status: 'scanning' });
   }
 });
 
-async function runScanner() {
+async function runScanner(courses) {
   sendLog("[Scanner] Starting background scan...");
   
-  // 1. Fetch user's courses (Mocking API fetch for extension purposes)
-  const courses = [
-    { id: 12345, name: 'CSC 1302' },
-    { id: 67890, name: 'MATH 2211' }
-  ];
+  if (!courses || courses.length === 0) {
+    sendLog("[Scanner] No courses found to scan.");
+    return;
+  }
 
   let newAnnouncements = [];
 
-  // 2. Fetch announcements for each course
+  // 2. Fetch announcements for each course using real API
   for (const course of courses) {
     try {
       sendLog(`[Scanner] Checking course: ${course.name}...`);
-      const mockNews = [
-        { Id: 101, Title: 'Welcome to Class', Body: 'Read the syllabus.', Course: course.name, CourseId: `/d2l/home/${course.id}` },
-        { Id: 102, Title: 'Exam 1 Moved', Body: 'Exam 1 is now on Friday.', Course: course.name, CourseId: `/d2l/home/${course.id}` }
-      ];
-      newAnnouncements.push(...mockNews);
+      const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/news/`);
+      
+      if (response.ok) {
+        const news = await response.json();
+        // The D2L API typically returns an array of News objects
+        if (Array.isArray(news)) {
+          news.forEach(item => {
+            newAnnouncements.push({
+              Id: item.Id || Math.random(),
+              Title: item.Title || 'Announcement',
+              Body: (item.Body && (item.Body.Text || item.Body.Html)) || 'No content.',
+              Course: course.name,
+              CourseId: `/d2l/home/${course.id}`
+            });
+          });
+        }
+      } else {
+        sendLog(`[Scanner] API returned ${response.status} for ${course.name}`);
+      }
     } catch (e) {
-      sendLog(`[Scanner] Failed to scan course ${course.name}`);
+      sendLog(`[Scanner] Error fetching course ${course.name}: ${e.message}`);
     }
   }
 
