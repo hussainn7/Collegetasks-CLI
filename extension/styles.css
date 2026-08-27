@@ -13,21 +13,6 @@
   --icollege-course-text: #475569;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --icollege-btn-bg: rgba(30, 30, 30, 0.9);
-    --icollege-btn-text: #e5e5e5;
-    --icollege-btn-border: #444;
-    --icollege-widget-bg: #1e1e1e;
-    --icollege-widget-border: #333;
-    --icollege-widget-text: #e5e5e5;
-    --icollege-widget-text-sec: #a1a1aa;
-    --icollege-header-border: #2d2d2d;
-    --icollege-course-bg: #2d2d2d;
-    --icollege-course-text: #a1a1aa;
-  }
-}
-
 /* Shared button styles for card overlays */
 .icollege-hide-btn, .icollege-mute-btn {
   position: absolute;
@@ -187,7 +172,8 @@ html.icollege-dark-mode {
 /* Re-invert media and specific elements so they look normal */
 html.icollege-dark-mode img,
 html.icollege-dark-mode video,
-html.icollege-dark-mode iframe,
+html.icollege-dark-mode iframe[src*="youtube"],
+html.icollege-dark-mode iframe[src*="vimeo"],
 html.icollege-dark-mode canvas,
 html.icollege-dark-mode .d2l-image,
 html.icollege-dark-mode [style*="background-image"],
@@ -196,11 +182,7 @@ html.icollege-dark-mode d2l-course-image {
   filter: invert(1) hue-rotate(180deg) !important;
 }
 
-/* Since our custom widget variables already handle native dark mode nicely, 
-   we MUST reverse the inversion on our injected widget, or else the filter 
-   will invert our nicely styled dark-mode widget into a bright white one! */
-html.icollege-dark-mode #icollege-whats-due-widget,
-html.icollege-dark-mode .icollege-hide-btn,
-html.icollege-dark-mode .icollege-mute-btn {
-  filter: invert(1) hue-rotate(180deg) !important;
+/* Fix text contrast inside iframes or shadows that might have transparent backgrounds */
+html.icollege-dark-mode {
+  color: #e5e5e5 !important;
 }
