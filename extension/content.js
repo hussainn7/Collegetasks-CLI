@@ -43,17 +43,16 @@ function initHideClasses() {
     mainContent.appendChild(unhideContainer);
   }
 
-  chrome.storage.local.get({ hiddenCourses: [] }, (data) => {
+  chrome.storage.local.get({ hiddenCourses: [], mutedCourses: [] }, (data) => {
     const hiddenCourses = new Set(data.hiddenCourses);
+    const mutedCourses = new Set(data.mutedCourses);
     
     setInterval(() => {
-      // Find course links by piercing shadow DOM
       const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
       
       links.forEach(link => {
         let card = link.closest('d2l-enrollment-card, d2l-card, .vui-card, .d2l-course-banner-container') || link.parentElement;
         
-        // Sometimes the link itself is the overlay! So let's attach to its parent if it's an overlay
         if (card === link) {
            card = link.parentElement;
         }
@@ -68,11 +67,11 @@ function initHideClasses() {
           card.style.display = 'none';
         }
 
+        // Hide Button
         const hideBtn = document.createElement('button');
-        hideBtn.innerText = '🙈 Hide';
+        hideBtn.innerText = 'Hide';
         hideBtn.className = 'icollege-hide-btn';
         
-        // Use capture phase to intercept clicks before the link catches them
         hideBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -82,17 +81,40 @@ function initHideClasses() {
           });
         }, true);
         
-        // Also prevent mousedown navigation
         hideBtn.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
         }, true);
+
+        // Mute Button
+        const muteBtn = document.createElement('button');
+        const isMuted = mutedCourses.has(courseId);
+        muteBtn.innerText = isMuted ? 'Unmute' : 'Mute';
+        muteBtn.className = 'icollege-mute-btn';
         
-        // Ensure card has relative positioning to hold the absolute button
+        muteBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (mutedCourses.has(courseId)) {
+            mutedCourses.delete(courseId);
+            muteBtn.innerText = 'Mute';
+          } else {
+            mutedCourses.add(courseId);
+            muteBtn.innerText = 'Unmute';
+          }
+          chrome.storage.local.set({ mutedCourses: Array.from(mutedCourses) });
+        }, true);
+
+        muteBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }, true);
+        
         if (window.getComputedStyle(card).position === 'static') {
             card.style.position = 'relative'; 
         }
         
+        card.appendChild(muteBtn);
         card.appendChild(hideBtn);
       });
     }, 2000);
@@ -141,11 +163,11 @@ async function injectWhatsDueUI() {
   let html = `
     <div class="whats-due-header">
       <h2 style="cursor: pointer; display: flex; align-items: center;" id="icollege-collapse-toggle">
-        📅 What's Due <span id="icollege-collapse-icon" style="margin-left: 8px; font-size: 14px;">▼</span>
+        What's Due <span id="icollege-collapse-icon" style="margin-left: 8px; font-size: 11px;">▼</span>
       </h2>
-      <div>
-        <button id="icollege-scan-btn" class="calendar-btn" style="background: #10b981; margin-right: 8px;">Scan Announcements 🔍</button>
-        <button id="icollege-calendar-sync-btn" class="calendar-btn">Sync to Google Calendar ✨</button>
+      <div style="display: flex; gap: 8px;">
+        <button id="icollege-scan-btn" class="calendar-btn">Scan Announcements</button>
+        <button id="icollege-calendar-sync-btn" class="calendar-btn">Sync Calendar</button>
       </div>
     </div>
     <div id="icollege-whats-due-body">
@@ -153,7 +175,7 @@ async function injectWhatsDueUI() {
   `;
   
   if (deadlines.length === 0) {
-    html += `<li class="empty-state">Nothing due soon! 🎉</li>`;
+    html += `<li class="empty-state">Nothing due soon</li>`;
   } else {
     deadlines.forEach(d => {
       html += `

@@ -56,12 +56,13 @@ async function runScanner(courses) {
     }
   }
 
-  // 3. Filter against "database" (chrome.storage.local) and ignore hidden courses
-  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'], async (data) => {
+  // 3. Filter against "database" (chrome.storage.local) and ignore hidden/muted courses
+  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'mutedCourses', 'geminiKey', 'tgChatId'], async (data) => {
     const processed = new Set(data.processedAnnouncements || []);
     const hidden = new Set(data.hiddenCourses || []);
+    const muted = new Set(data.mutedCourses || []);
     
-    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(a.CourseId));
+    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(a.CourseId) && !muted.has(a.CourseId));
 
     if (trulyNew.length === 0) {
       sendLog("[Scanner] No new announcements found.");
