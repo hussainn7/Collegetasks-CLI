@@ -6,6 +6,8 @@ Usage:
     python main.py scan               Full scan pipeline
     python main.py scan --courses "CSC 1302,MATH 2211"
     python main.py stats              Show database statistics
+    python main.py clean              Clear the announcement database
+    python main.py chatid             Get your Telegram chat ID from the bot
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     from scraper.announcements import scrape_course_announcements
     from state.db import AnnouncementDB
     from intelligence.summarizer import summarize_announcements, CourseSummary
-    from notifications.discord import send_discord_notification
+    from notifications.telegram import send_telegram_notification
 
     # Parse course filter from CLI args
     cli_filters: list[str] = []
@@ -122,8 +124,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
     _display_summaries(summaries)
 
     # ── Step 6: Send notifications ────────────────────────────────
-    console.print(f"\n[bold]Step 6:[/bold] Sending notifications...")
-    sent = send_discord_notification(summaries)
+    console.print(f"\n[bold]Step 6:[/bold] Sending Telegram notification...")
+    sent = send_telegram_notification(summaries)
 
     # Mark all new announcements as notified
     if sent or not args.notify_only:
@@ -134,7 +136,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             f"[bold green]✓ Scan complete![/bold green]\n"
             f"  • {len(new_announcements)} new announcement(s) processed\n"
             f"  • {sum(len(s.action_items) for s in summaries)} action item(s) found\n"
-            f"  • Notification: {'sent ✓' if sent else 'skipped (no webhook)'}",
+            f"  • Telegram: {'sent ✓' if sent else 'skipped (not configured)'}",
             title="Summary",
             border_style="green",
         )
@@ -156,6 +158,106 @@ def cmd_stats(args: argparse.Namespace) -> None:
     table.add_row("Pending", str(stats["pending"]))
     table.add_row("Courses Tracked", str(stats["courses_tracked"]))
     console.print(table)
+
+
+def cmd_clean(args: argparse.Namespace) -> None:
+    """Clear the announcement database."""
+    from state.db import AnnouncementDB
+    from config import settings
+    import os
+
+    db_path = settings.db_path
+
+    if not db_path.exists():
+        console.print("[yellow]Database doesn't exist yet — nothing to clean.[/yellow]")
+        return
+
+    # Get stats before cleaning
+    db = AnnouncementDB()
+    stats = db.get_stats()
+
+    os.remove(str(db_path))
+    console.print(
+        Panel(
+            f"[bold green]✓ Database cleaned![/bold green]\n"
+            f"  Removed {stats['total_seen']} announcement record(s)\n"
+            f"  from {stats['courses_tracked']} course(s)\n\n"
+            f"  [dim]Next scan will treat all announcements as new.[/dim]",
+            title="🧹 Clean",
+            border_style="green",
+        )
+    )
+
+
+def cmd_chatid(args: argparse.Namespace) -> None:
+    """Fetch and display the Telegram chat ID from the bot's recent messages."""
+    import httpx
+    from config import settings
+
+    token = settings.telegram_bot_token
+    if not token:
+        console.print("[red]✗ TELEGRAM_BOT_TOKEN not set in .env[/red]")
+        return
+
+    console.print("[dim]Fetching recent messages from bot...[/dim]")
+    console.print(
+        "[yellow]Make sure you've sent [bold]/start[/bold] to your bot "
+        "on Telegram first![/yellow]\n"
+    )
+
+    try:
+        resp = httpx.get(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("ok"):
+            console.print(f"[red]✗ Telegram API error: {data}[/red]")
+            return
+
+        updates = data.get("result", [])
+        if not updates:
+            console.print(
+                "[yellow]No messages found. Send [bold]/start[/bold] "
+                "to your bot on Telegram, then re-run this command.[/yellow]"
+            )
+            return
+
+        # Show all unique chat IDs found
+        seen_chats: set[str] = set()
+        table = Table(title="💬 Telegram Chats Found")
+        table.add_column("Chat ID", style="bold green")
+        table.add_column("Username", style="cyan")
+        table.add_column("Name", style="white")
+        table.add_column("Type", style="dim")
+
+        for update in updates:
+            msg = update.get("message", {})
+            chat = msg.get("chat", {})
+            chat_id = str(chat.get("id", ""))
+
+            if not chat_id or chat_id in seen_chats:
+                continue
+            seen_chats.add(chat_id)
+
+            username = chat.get("username", "—")
+            first = chat.get("first_name", "")
+            last = chat.get("last_name", "")
+            name = f"{first} {last}".strip() or "—"
+            chat_type = chat.get("type", "—")
+
+            table.add_row(chat_id, f"@{username}" if username != "—" else "—", name, chat_type)
+
+        console.print(table)
+        console.print(
+            "\n[bold]Copy your Chat ID and add it to .env:[/bold]\n"
+            "  TELEGRAM_CHAT_ID=<your chat id>"
+        )
+
+    except Exception as exc:
+        console.print(f"[red]✗ Error: {exc}[/red]")
 
 
 def _display_summaries(summaries: list) -> None:
@@ -212,33 +314,31 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # login
-    login_parser = subparsers.add_parser("login", help="Interactive SSO login")
-    login_parser.set_defaults(func=cmd_login)
+    subparsers.add_parser("login", help="Interactive SSO login").set_defaults(func=cmd_login)
 
     # courses
-    courses_parser = subparsers.add_parser("courses", help="List enrolled courses")
-    courses_parser.set_defaults(func=cmd_courses)
+    subparsers.add_parser("courses", help="List enrolled courses").set_defaults(func=cmd_courses)
 
     # scan
-    scan_parser = subparsers.add_parser(
-        "scan", help="Scan for new announcements"
-    )
+    scan_parser = subparsers.add_parser("scan", help="Scan for new announcements")
     scan_parser.add_argument(
-        "--courses",
-        type=str,
-        default="",
+        "--courses", type=str, default="",
         help='Comma-separated course filter (e.g., "CSC 1302,MATH 2211")',
     )
     scan_parser.add_argument(
-        "--notify-only",
-        action="store_true",
-        help="Only mark announcements as notified if webhook succeeds",
+        "--notify-only", action="store_true",
+        help="Only mark announcements as notified if Telegram succeeds",
     )
     scan_parser.set_defaults(func=cmd_scan)
 
     # stats
-    stats_parser = subparsers.add_parser("stats", help="Show database stats")
-    stats_parser.set_defaults(func=cmd_stats)
+    subparsers.add_parser("stats", help="Show database stats").set_defaults(func=cmd_stats)
+
+    # clean
+    subparsers.add_parser("clean", help="Clear the announcement database").set_defaults(func=cmd_clean)
+
+    # chatid
+    subparsers.add_parser("chatid", help="Get your Telegram chat ID").set_defaults(func=cmd_chatid)
 
     args = parser.parse_args()
 

@@ -44,10 +44,14 @@ class Settings(BaseSettings):
         description="Google Gemini API key for LLM summarization.",
     )
 
-    # ── Notifications ─────────────────────────────────
-    discord_webhook_url: str = Field(
+    # ── Notifications (Telegram) ────────────────────────
+    telegram_bot_token: str = Field(
         default="",
-        description="Discord webhook URL for sending notifications.",
+        description="Telegram Bot API token.",
+    )
+    telegram_chat_id: str = Field(
+        default="",
+        description="Telegram chat ID or @username to send notifications to.",
     )
 
     # ── Browser ───────────────────────────────────────
