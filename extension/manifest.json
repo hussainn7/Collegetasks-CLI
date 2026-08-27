@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "iCollege Organizer",
+  "version": "1.0.0",
+  "description": "Unified 'What's Due' checklist, class hider, and Google Calendar sync for iCollege.",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gastate.view.usg.edu/*"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}
