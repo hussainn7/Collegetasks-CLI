@@ -6,6 +6,13 @@
   "permissions": [
     "storage"
   ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "iCollege Organizer Settings"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
