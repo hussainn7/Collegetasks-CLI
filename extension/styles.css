@@ -77,6 +77,8 @@
   list-style: none;
   padding: 0;
   margin: 0;
+  max-height: 250px;
+  overflow-y: auto;
 }
 
 .whats-due-list li {

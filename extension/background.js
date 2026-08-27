@@ -34,8 +34,8 @@ async function runScanner() {
     try {
       sendLog(`[Scanner] Checking course: ${course.name}...`);
       const mockNews = [
-        { Id: 101, Title: 'Welcome to Class', Body: 'Read the syllabus.', Course: course.name },
-        { Id: 102, Title: 'Exam 1 Moved', Body: 'Exam 1 is now on Friday.', Course: course.name }
+        { Id: 101, Title: 'Welcome to Class', Body: 'Read the syllabus.', Course: course.name, CourseId: `/d2l/home/${course.id}` },
+        { Id: 102, Title: 'Exam 1 Moved', Body: 'Exam 1 is now on Friday.', Course: course.name, CourseId: `/d2l/home/${course.id}` }
       ];
       newAnnouncements.push(...mockNews);
     } catch (e) {
@@ -43,10 +43,12 @@ async function runScanner() {
     }
   }
 
-  // 3. Filter against "database" (chrome.storage.local)
-  chrome.storage.local.get(['processedAnnouncements', 'geminiKey', 'tgChatId'], async (data) => {
+  // 3. Filter against "database" (chrome.storage.local) and ignore hidden courses
+  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'], async (data) => {
     const processed = new Set(data.processedAnnouncements || []);
-    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id));
+    const hidden = new Set(data.hiddenCourses || []);
+    
+    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(a.CourseId));
 
     if (trulyNew.length === 0) {
       sendLog("[Scanner] No new announcements found.");
@@ -66,7 +68,7 @@ async function runScanner() {
       
       if (data.tgChatId) {
         sendLog(`[Scanner] Sending Telegram notification to ${data.tgChatId}...`);
-        await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Announcement in ${ann.Course}*\\n\\n*${ann.Title}*\\n${summary}`);
+        await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Announcement in ${ann.Course}*\n\n*${ann.Title}*\n${summary}`);
       } else {
         sendLog(`[Scanner] Telegram Chat ID not set! Summary: ${summary.substring(0,30)}...`);
       }

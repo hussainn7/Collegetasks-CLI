@@ -1,7 +1,6 @@
-# Dependencies
+venv/
 data/
-.env
 __pycache__/
-*.pyc
-.pytest_cache/
-venv/extension/config.js
+*.db
+.env
+extension/config.js
