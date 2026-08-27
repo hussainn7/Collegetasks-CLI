@@ -43,9 +43,8 @@ function initHideClasses() {
     mainContent.appendChild(unhideContainer);
   }
 
-  chrome.storage.local.get({ hiddenCourses: [], mutedCourses: [] }, (data) => {
+  chrome.storage.local.get({ hiddenCourses: [] }, (data) => {
     const hiddenCourses = new Set(data.hiddenCourses);
-    const mutedCourses = new Set(data.mutedCourses);
     
     setInterval(() => {
       const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
@@ -57,15 +56,16 @@ function initHideClasses() {
            card = link.parentElement;
         }
         
-        if (card.hasAttribute('data-hide-injected')) return;
-        card.setAttribute('data-hide-injected', 'true');
-        
         const courseId = link.getAttribute('href');
         if (!courseId) return;
 
         if (hiddenCourses.has(courseId)) {
-          card.style.display = 'none';
+          card.remove();
+          return;
         }
+
+        if (card.hasAttribute('data-hide-injected')) return;
+        card.setAttribute('data-hide-injected', 'true');
 
         // Inline styles to pierce any Shadow DOM strictness
         const btnStyle = `
@@ -96,36 +96,11 @@ function initHideClasses() {
           e.stopPropagation();
           hiddenCourses.add(courseId);
           chrome.storage.local.set({ hiddenCourses: Array.from(hiddenCourses) }, () => {
-            card.style.display = 'none';
+            card.remove();
           });
         }, true);
         
         hideBtn.addEventListener('mousedown', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }, true);
-
-        // Mute Button
-        const muteBtn = document.createElement('button');
-        const isMuted = mutedCourses.has(courseId);
-        muteBtn.innerText = isMuted ? 'Unmute' : 'Mute';
-        muteBtn.className = 'icollege-mute-btn';
-        muteBtn.style.cssText = btnStyle + 'right: 60px !important;';
-        
-        muteBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (mutedCourses.has(courseId)) {
-            mutedCourses.delete(courseId);
-            muteBtn.innerText = 'Mute';
-          } else {
-            mutedCourses.add(courseId);
-            muteBtn.innerText = 'Unmute';
-          }
-          chrome.storage.local.set({ mutedCourses: Array.from(mutedCourses) });
-        }, true);
-
-        muteBtn.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
         }, true);
@@ -134,7 +109,6 @@ function initHideClasses() {
             card.style.position = 'relative'; 
         }
         
-        card.appendChild(muteBtn);
         card.appendChild(hideBtn);
       });
     }, 2000);

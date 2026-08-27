@@ -56,13 +56,12 @@ async function runScanner(courses) {
     }
   }
 
-  // 3. Filter against "database" (chrome.storage.local) and ignore hidden/muted courses
-  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'mutedCourses', 'geminiKey', 'tgChatId'], async (data) => {
+  // 3. Filter against "database" (chrome.storage.local) and ignore hidden courses
+  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'], async (data) => {
     const processed = new Set(data.processedAnnouncements || []);
     const hidden = new Set(data.hiddenCourses || []);
-    const muted = new Set(data.mutedCourses || []);
     
-    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(a.CourseId) && !muted.has(a.CourseId));
+    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(a.CourseId));
 
     if (trulyNew.length === 0) {
       sendLog("[Scanner] No new announcements found.");
@@ -71,23 +70,33 @@ async function runScanner(courses) {
 
     sendLog(`[Scanner] Found ${trulyNew.length} new announcements! Processing...`);
 
-    // 4. Summarize & Notify
+    // 4. Group by course
+    const announcementsByCourse = {};
     for (const ann of trulyNew) {
-      let summary = ann.Body;
+      if (!announcementsByCourse[ann.Course]) {
+        announcementsByCourse[ann.Course] = [];
+      }
+      announcementsByCourse[ann.Course].push(ann);
+    }
+
+    // 5. Summarize & Notify per course
+    for (const [courseName, anns] of Object.entries(announcementsByCourse)) {
+      let combinedText = anns.map(a => `Title: ${a.Title}\nBody: ${a.Body}`).join('\n\n---\n\n');
+      let summary = combinedText;
       
       if (data.geminiKey) {
-        sendLog(`[Scanner] Summarizing announcement for ${ann.Course} using Gemini...`);
-        summary = await summarizeWithGemini(ann.Body, data.geminiKey);
+        sendLog(`[Scanner] Summarizing ${anns.length} announcements for ${courseName}...`);
+        summary = await summarizeWithGemini(combinedText, data.geminiKey);
       }
       
       if (data.tgChatId) {
         sendLog(`[Scanner] Sending Telegram notification to ${data.tgChatId}...`);
-        await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Announcement in ${ann.Course}*\n\n*${ann.Title}*\n${summary}`);
+        await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Announcements in ${courseName}*\n\n${summary}`);
       } else {
         sendLog(`[Scanner] Telegram Chat ID not set! Summary: ${summary.substring(0,30)}...`);
       }
       
-      processed.add(ann.Id);
+      anns.forEach(a => processed.add(a.Id));
     }
 
     chrome.storage.local.set({ processedAnnouncements: Array.from(processed) });
