@@ -68,14 +68,15 @@ function initHideClasses() {
         card.setAttribute('data-hide-injected', 'true');
 
         // Inline styles to pierce any Shadow DOM strictness
+        // CSS Variables are defined in styles.css and inherited into Shadow DOM automatically
         const btnStyle = `
           position: absolute !important;
           top: 10px !important;
           z-index: 2147483647 !important;
           pointer-events: auto !important;
-          background-color: rgba(255, 255, 255, 0.9) !important;
-          color: #333 !important;
-          border: 1px solid #e5e5e5 !important;
+          background-color: var(--icollege-btn-bg, rgba(255, 255, 255, 0.9)) !important;
+          color: var(--icollege-btn-text, #333) !important;
+          border: 1px solid var(--icollege-btn-border, #e5e5e5) !important;
           border-radius: 4px !important;
           padding: 4px 8px !important;
           font-size: 11px !important;

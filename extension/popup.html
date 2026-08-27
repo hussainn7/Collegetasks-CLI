@@ -41,20 +41,39 @@
       color: white;
       border: none;
       padding: 10px;
-      border-radius: 6px;
-      font-weight: bold;
+      border-radius: 4px;
       cursor: pointer;
-      margin-top: 8px;
+      font-weight: 600;
     }
     button:hover {
       background: #4f46e5;
     }
-    #status {
+    .status {
       margin-top: 10px;
       font-size: 12px;
       color: #10b981;
       text-align: center;
-      min-height: 15px;
+      display: none;
+    }
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #1e1e1e;
+        color: #e5e5e5;
+      }
+      h2 {
+        border-bottom-color: #333;
+      }
+      label {
+        color: #aaa;
+      }
+      input {
+        background-color: #2d2d2d;
+        color: #e5e5e5;
+        border-color: #444;
+      }
+      button {
+        background: #4f46e5;
+      }
     }
   </style>
 </head>
