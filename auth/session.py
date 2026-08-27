@@ -1,24 +1,27 @@
-"""Session validation and headless browser context management.
+"""Session validation and persistent browser context management.
 
-This module loads a previously saved Playwright session state and
-validates that it's still authenticated against D2L Brightspace
-at gastate.view.usg.edu. It provides a context manager that yields
-a ready-to-use Playwright Page object.
+Uses Playwright's launch_persistent_context to maintain a real Chrome
+profile on disk. This means all cookies (including Duo MFA trust tokens
+and D2L session cookies) survive across browser restarts.
+
+Key behavior:
+  - Session cookies auto-renew each time the browser visits D2L
+  - Duo "trust this browser" lasts ~30 days
+  - If the session does expire, auto-attempts re-auth via the SAML
+    endpoint before giving up (the persistent profile often has enough
+    state for SSO to succeed without manual intervention)
 """
 
 from __future__ import annotations
 
-import json
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Generator
 
 from playwright.sync_api import (
     sync_playwright,
     Page,
     BrowserContext,
-    Browser,
     Playwright,
     TimeoutError as PwTimeout,
 )
@@ -29,60 +32,93 @@ from config import settings
 console = Console()
 
 
-def session_exists() -> bool:
-    """Check if a session state file exists on disk."""
-    return settings.session_path.is_file()
+def _profile_exists() -> bool:
+    """Check if the persistent browser profile directory exists and has data."""
+    profile = settings.browser_profile_path
+    return profile.is_dir() and any(profile.iterdir())
 
 
 def validate_session(page: Page) -> bool:
-    """Check if the saved session is still authenticated against D2L.
+    """Check if the persistent profile is still authenticated against D2L.
 
-    Uses a lightweight API endpoint to avoid full page loads and
-    networkidle waits that can time out on slow connections.
-
-    Returns True if the session is valid, False otherwise.
+    Uses the lightweight /d2l/api/lp/1.43/users/whoami endpoint.
+    Returns True if authenticated, False otherwise.
     """
     d2l_base = settings.d2l_base_url.rstrip("/")
 
     try:
-        # Use a lightweight API endpoint — the "whoami" call is fast
-        # and clearly tells us if we're authenticated
         whoami_url = f"{d2l_base}/d2l/api/lp/1.43/users/whoami"
         response = page.goto(whoami_url, wait_until="domcontentloaded", timeout=20_000)
 
         if response:
             current_url = page.url.lower()
 
-            # If we got redirected to SSO, session is expired
-            if any(marker in current_url for marker in [
-                "idp.gsu.edu", "initiate-login", "shibboleth", "cas/login"
+            # Redirected to SSO → session expired
+            if any(m in current_url for m in [
+                "idp.gsu.edu", "initiate-login", "shibboleth"
             ]):
                 return False
 
-            # If API returned 200, we're authenticated
+            # API returned 200 → authenticated
             if response.status == 200:
                 return True
 
-            # 403 means the cookies are there but the session expired
+            # 403 → cookies present but session expired on server
             if response.status == 403:
                 return False
-
-        # Fallback: try loading the D2L homepage
-        response2 = page.goto(f"{d2l_base}/d2l/home", wait_until="domcontentloaded", timeout=20_000)
-        current_url = page.url.lower()
-
-        if "gastate.view.usg.edu" in current_url and "/d2l/" in current_url:
-            if "initiate-login" not in current_url:
-                return True
 
         return False
 
     except PwTimeout:
-        console.print("[yellow]⚠ Session validation timed out[/yellow]")
         return False
-    except Exception as exc:
-        console.print(f"[yellow]⚠ Session validation error: {exc}[/yellow]")
+    except Exception:
         return False
+
+
+def _try_silent_reauth(context: BrowserContext) -> bool:
+    """Attempt silent re-authentication via the SAML endpoint.
+
+    Because the persistent profile retains Duo's trust cookie and the
+    IdP's session cookie, SSO can often complete automatically without
+    any user interaction. This is what makes the cron job work.
+
+    Returns True if re-auth succeeded, False if manual login is needed.
+    """
+    console.print("[yellow]Session expired — attempting silent re-auth...[/yellow]")
+
+    page = context.new_page()
+    try:
+        # Navigate to the SAML login URL
+        page.goto(
+            settings.saml_login_url,
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+
+        # Wait up to 30 seconds for SSO to complete automatically
+        # (IdP session + Duo trust cookie should carry us through)
+        try:
+            page.wait_for_function(
+                """() => {
+                    const url = window.location.href.toLowerCase();
+                    return url.includes('gastate.view.usg.edu') && (
+                        url.includes('/d2l/home') ||
+                        url.includes('/d2l/le/') ||
+                        url.includes('/d2l/lp/')
+                    ) && !url.includes('initiate-login');
+                }""",
+                timeout=30_000,
+            )
+            page.wait_for_load_state("networkidle", timeout=10_000)
+            console.print("[green]✓ Silent re-auth succeeded![/green]")
+            return True
+        except PwTimeout:
+            # SSO didn't complete automatically — needs manual login
+            return False
+    except Exception:
+        return False
+    finally:
+        page.close()
 
 
 @contextmanager
@@ -91,54 +127,71 @@ def authenticated_context(
 ) -> Generator[Page, None, None]:
     """Context manager that yields an authenticated Playwright Page.
 
+    Uses a persistent browser profile so sessions survive across runs.
+    If the session has expired, attempts silent re-authentication via
+    the saved IdP/Duo cookies. Only fails if manual login is truly needed.
+
     Usage:
         with authenticated_context() as page:
             page.goto("https://gastate.view.usg.edu/d2l/home")
             # ... scrape away
-
-    If the session is invalid or missing, prints an error and exits.
     """
-    if not session_exists():
+    settings.ensure_data_dir()
+    profile_path = str(settings.browser_profile_path)
+    use_headless = headless if headless is not None else settings.headless
+
+    if not _profile_exists():
         console.print(
-            "[bold red]✗ No session found.[/bold red] "
+            "[bold red]✗ No browser profile found.[/bold red] "
             "Run [bold]python main.py login[/bold] first."
         )
         sys.exit(1)
 
-    use_headless = headless if headless is not None else settings.headless
-
     pw: Playwright = sync_playwright().start()
-    browser: Browser | None = None
+    context: BrowserContext | None = None
 
     try:
-        browser = pw.chromium.launch(
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=profile_path,
             headless=use_headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context: BrowserContext = browser.new_context(
-            storage_state=str(settings.session_path),
             viewport={"width": 1280, "height": 800},
+            args=[
+                "--disable-blink-features=AutomationControlled",
+            ],
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/128.0.0.0 Safari/537.36"
             ),
+            ignore_default_args=["--enable-automation"],
         )
-        page = context.new_page()
 
-        # Validate the session before yielding
+        page = context.pages[0] if context.pages else context.new_page()
+
+        # Validate the session
         console.print("[dim]Validating session...[/dim]")
-        if not validate_session(page):
-            console.print(
-                "[bold red]✗ Session expired.[/bold red] "
-                "Run [bold]python main.py login[/bold] to re-authenticate."
-            )
-            sys.exit(1)
+        if validate_session(page):
+            console.print("[green]✓ Session valid[/green]")
+            yield page
+            return
 
-        console.print("[green]✓ Session valid[/green]")
-        yield page
+        # Session expired — try silent re-auth
+        if _try_silent_reauth(context):
+            # Re-validate on the original page
+            if validate_session(page):
+                console.print("[green]✓ Session restored[/green]")
+                yield page
+                return
+
+        # Silent re-auth failed — manual login needed
+        console.print(
+            "[bold red]✗ Session expired and silent re-auth failed.[/bold red]\n"
+            "Run [bold]python main.py login[/bold] to re-authenticate.\n"
+            "[dim]Tip: Check 'Remember me' in Duo to extend trust to 30 days.[/dim]"
+        )
+        sys.exit(1)
 
     finally:
-        if browser:
-            browser.close()
+        if context:
+            context.close()
         pw.stop()

@@ -1,13 +1,13 @@
 """Interactive Playwright login for GSU iCollege SSO.
 
-This module launches a visible browser window so the user can complete
-the full SSO flow (CampusID + password + Duo MFA). After successful
-authentication, the browser session state (cookies + localStorage) is
-saved to disk for headless reuse in subsequent scraping runs.
+Uses a PERSISTENT browser profile so that session cookies, Duo's
+"trust this browser" token, and all auth state survive across runs —
+just like a real Chrome installation. This means:
 
-Key discovery: icollege.gsu.edu is a WordPress landing page.
-The actual D2L Brightspace instance lives at gastate.view.usg.edu.
-Login is initiated via SAML SSO through GSU's Shibboleth IdP.
+  - After the first login + Duo MFA, subsequent runs reuse the profile
+  - Duo "remember me for 30 days" works because the cookie persists
+  - D2L session cookies auto-renew on each visit
+  - You only need to re-login if the profile is deleted or Duo trust expires
 """
 
 from __future__ import annotations
@@ -23,42 +23,30 @@ from config import settings
 
 console = Console()
 
-
 # Maximum time (ms) to wait for the user to complete MFA
 _LOGIN_TIMEOUT_MS = 5 * 60 * 1000  # 5 minutes
 
 
-def _is_authenticated(url: str) -> bool:
-    """Check if the current URL indicates a successful D2L login.
-
-    After SAML SSO completes, the browser lands on the D2L homepage
-    at gastate.view.usg.edu/d2l/home or similar.
-    """
+def _is_on_d2l_dashboard(url: str) -> bool:
+    """Check if the URL indicates a successful D2L login."""
     url_lower = url.lower()
-    d2l_host = "gastate.view.usg.edu"
     return (
-        d2l_host in url_lower
+        "gastate.view.usg.edu" in url_lower
         and any(p in url_lower for p in ["/d2l/home", "/d2l/le/", "/d2l/lp/"])
-        # Exclude the SAML initiate-login URL itself
         and "initiate-login" not in url_lower
     )
 
 
-def interactive_login() -> Path:
-    """Launch a headed browser for the user to complete SSO login.
+def interactive_login() -> None:
+    """Launch a headed persistent browser for the user to complete SSO login.
 
-    Returns the path to the saved session state file.
-
-    Flow:
-        1. Open Chromium (headed) → navigate to SAML login URL
-        2. GSU Shibboleth IdP handles the SSO redirect
-        3. User completes CampusID + password + Duo MFA
-        4. SAML assertion redirects back to gastate.view.usg.edu
-        5. Wait until the URL indicates successful D2L authentication
-        6. Save storageState (cookies + localStorage) to disk
+    Uses launch_persistent_context so the browser profile (cookies,
+    localStorage, Duo trust, etc.) is saved to disk permanently.
+    After the first successful login + Duo MFA, the profile persists
+    and future runs won't need to re-authenticate.
     """
     settings.ensure_data_dir()
-    session_path = settings.session_path
+    profile_path = str(settings.browser_profile_path)
 
     console.print(
         Panel(
@@ -67,9 +55,11 @@ def interactive_login() -> Path:
             "Please:\n"
             "  1. Enter your [bold]CampusID[/bold] and password\n"
             "  2. Complete [bold]Duo MFA[/bold] verification\n"
-            "  3. Wait until the iCollege/D2L dashboard loads\n\n"
+            "  3. [bold yellow]Check 'Remember me' / 'Trust this browser'[/bold yellow]\n"
+            "     in Duo so you won't need MFA again for 30 days\n"
+            "  4. Wait until the iCollege/D2L dashboard loads\n\n"
             "The window will close automatically once login succeeds.\n"
-            f"[dim]D2L Host: gastate.view.usg.edu[/dim]\n"
+            f"[dim]Profile: {profile_path}[/dim]\n"
             f"[dim]Timeout: 5 minutes[/dim]",
             title="🔐 Login Required",
             border_style="cyan",
@@ -77,27 +67,42 @@ def interactive_login() -> Path:
     )
 
     with sync_playwright() as pw:
-        # Launch a visible browser so the user can interact with SSO
-        browser = pw.chromium.launch(
+        # Use a persistent context — this is the key difference.
+        # All cookies, localStorage, service workers, and Duo trust
+        # tokens are stored in the profile directory and survive
+        # browser restarts.
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=profile_path,
             headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context = browser.new_context(
             viewport={"width": 1280, "height": 800},
+            args=[
+                "--disable-blink-features=AutomationControlled",
+            ],
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/128.0.0.0 Safari/537.36"
             ),
+            ignore_default_args=["--enable-automation"],
         )
-        page = context.new_page()
+
+        page = context.pages[0] if context.pages else context.new_page()
 
         try:
             # Navigate to the SAML SSO login entry point
             login_url = settings.saml_login_url
             console.print(f"[dim]Navigating to SAML login...[/dim]")
-            console.print(f"[dim]{login_url}[/dim]")
             page.goto(login_url, wait_until="domcontentloaded")
+
+            # Check if we're already authenticated (profile still valid)
+            current_url = page.url.lower()
+            if _is_on_d2l_dashboard(current_url):
+                console.print(
+                    "[bold green]✓ Already authenticated![/bold green] "
+                    "Profile is still valid — no login needed."
+                )
+                context.close()
+                return
 
             # Wait for the user to complete login and land on D2L
             console.print("[yellow]Waiting for you to complete login...[/yellow]")
@@ -114,16 +119,15 @@ def interactive_login() -> Path:
                 timeout=_LOGIN_TIMEOUT_MS,
             )
 
-            # Give the page a moment to fully stabilize cookies
+            # Let the page fully load so all cookies are set
             page.wait_for_load_state("networkidle", timeout=15_000)
 
             console.print(f"[dim]Authenticated! Final URL: {page.url}[/dim]")
-
-            # Save the authenticated session state
-            context.storage_state(path=str(session_path))
             console.print(
-                f"[bold green]✓ Login successful![/bold green] "
-                f"Session saved to [dim]{session_path}[/dim]"
+                "[bold green]✓ Login successful![/bold green] "
+                f"Profile saved to [dim]{profile_path}[/dim]\n"
+                "[dim]Session will persist across runs. "
+                "Duo trust lasts ~30 days.[/dim]"
             )
 
         except PwTimeout:
@@ -131,18 +135,16 @@ def interactive_login() -> Path:
                 "[bold red]✗ Login timed out.[/bold red] "
                 "Please try again and complete login within 5 minutes."
             )
-            browser.close()
+            context.close()
             sys.exit(1)
 
         except Exception as exc:
             console.print(f"[bold red]✗ Login failed:[/bold red] {exc}")
-            browser.close()
+            context.close()
             sys.exit(1)
 
         finally:
-            browser.close()
-
-    return session_path
+            context.close()
 
 
 if __name__ == "__main__":

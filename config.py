@@ -65,9 +65,9 @@ class Settings(BaseSettings):
         default=PROJECT_ROOT / "data" / "icollege.db",
         description="Path to the SQLite database file.",
     )
-    session_path: Path = Field(
-        default=PROJECT_ROOT / "data" / "session_state.json",
-        description="Path to the Playwright session state JSON file.",
+    browser_profile_path: Path = Field(
+        default=PROJECT_ROOT / "data" / "browser_profile",
+        description="Path to the persistent Chromium profile directory.",
     )
 
     # ── Course Filter ─────────────────────────────────
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     def ensure_data_dir(self) -> None:
         """Create the data directory if it doesn't exist."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.session_path.parent.mkdir(parents=True, exist_ok=True)
+        self.browser_profile_path.mkdir(parents=True, exist_ok=True)
 
 
 # Singleton instance
