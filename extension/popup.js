@@ -19,4 +19,13 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => { status.textContent = ''; }, 2000);
     });
   });
+
+  // Clear DB
+  document.getElementById('clearDbBtn').addEventListener('click', () => {
+    chrome.storage.local.remove('processedAnnouncements', () => {
+      const status = document.getElementById('status');
+      status.textContent = 'Database cleared! ✓';
+      setTimeout(() => { status.textContent = ''; }, 2000);
+    });
+  });
 });

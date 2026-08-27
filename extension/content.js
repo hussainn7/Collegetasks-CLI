@@ -25,16 +25,19 @@ function initHideClasses() {
     const hiddenCourses = new Set(data.hiddenCourses);
     
     setInterval(() => {
-      // Find cards by piercing shadow DOM
-      const cards = querySelectorAllShadows('d2l-enrollment-card');
+      // Find course links by piercing shadow DOM
+      // We look for any link pointing to a course homepage
+      const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
       
-      cards.forEach(card => {
+      links.forEach(link => {
+        // Find the container for this link. In D2L, it's often d2l-enrollment-card
+        // or a generic parent element wrapping the image.
+        let card = link.closest('d2l-enrollment-card, d2l-card, .vui-card, .d2l-course-banner-container') || link.parentElement;
+        
         if (card.hasAttribute('data-hide-injected')) return;
         card.setAttribute('data-hide-injected', 'true');
         
-        const link = card.shadowRoot?.querySelector('a') || card.querySelector('a');
-        const courseId = link ? link.getAttribute('href') : card.getAttribute('text');
-        
+        const courseId = link.getAttribute('href');
         if (!courseId) return;
 
         if (hiddenCourses.has(courseId)) {
@@ -132,6 +135,14 @@ async function injectWhatsDueUI() {
   }
   
   html += `</ul>`;
+  
+  // Add scanner log container
+  html += `
+    <div id="icollege-scanner-logs" style="margin-top: 15px; max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 11px; color: #555; background: #f8fafc; padding: 8px; border-radius: 4px; border: 1px solid #e2e8f0; display: none;">
+      <div><em>Scanner idle.</em></div>
+    </div>
+  `;
+  
   widget.innerHTML = html;
   
   const mainContent = document.querySelector('.d2l-page-main') || document.body;
@@ -146,11 +157,28 @@ async function injectWhatsDueUI() {
   });
   
   document.getElementById('icollege-scan-btn').addEventListener('click', () => {
+    const logContainer = document.getElementById('icollege-scanner-logs');
+    logContainer.style.display = 'block';
+    logContainer.innerHTML = '<div><em>Starting scan...</em></div>';
+    
     // Send message to background script to trigger manual scan
     chrome.runtime.sendMessage({ action: 'scan_announcements' });
-    alert("Background scan initiated! Check extension popup for progress.");
   });
 }
+
+// Listen for logs from background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'scanner_log') {
+    const logContainer = document.getElementById('icollege-scanner-logs');
+    if (logContainer) {
+      logContainer.style.display = 'block';
+      const logLine = document.createElement('div');
+      logLine.innerText = request.message;
+      logContainer.appendChild(logLine);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+  }
+});
 
 function generateAndDownloadICS(deadlines) {
   if (!deadlines || deadlines.length === 0) {
