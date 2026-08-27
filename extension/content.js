@@ -67,10 +67,29 @@ function initHideClasses() {
           card.style.display = 'none';
         }
 
+        // Inline styles to pierce any Shadow DOM strictness
+        const btnStyle = `
+          position: absolute !important;
+          top: 10px !important;
+          z-index: 2147483647 !important;
+          pointer-events: auto !important;
+          background-color: rgba(255, 255, 255, 0.9) !important;
+          color: #333 !important;
+          border: 1px solid #e5e5e5 !important;
+          border-radius: 4px !important;
+          padding: 4px 8px !important;
+          font-size: 11px !important;
+          font-weight: 500 !important;
+          cursor: pointer !important;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+          display: block !important;
+        `;
+
         // Hide Button
         const hideBtn = document.createElement('button');
         hideBtn.innerText = 'Hide';
         hideBtn.className = 'icollege-hide-btn';
+        hideBtn.style.cssText = btnStyle + 'right: 10px !important;';
         
         hideBtn.addEventListener('click', (e) => {
           e.preventDefault();
@@ -91,6 +110,7 @@ function initHideClasses() {
         const isMuted = mutedCourses.has(courseId);
         muteBtn.innerText = isMuted ? 'Unmute' : 'Mute';
         muteBtn.className = 'icollege-mute-btn';
+        muteBtn.style.cssText = btnStyle + 'right: 60px !important;';
         
         muteBtn.addEventListener('click', (e) => {
           e.preventDefault();
