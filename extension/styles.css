@@ -174,3 +174,33 @@
   font-size: 13px;
   padding: 20px 0;
 }
+
+/* ========================================================= */
+/* Global Dark Mode Engine (Filter Inversion)                  */
+/* ========================================================= */
+
+html.icollege-dark-mode {
+  filter: invert(1) hue-rotate(180deg) !important;
+  background-color: #121212 !important; /* Base background for the page when inverted */
+}
+
+/* Re-invert media and specific elements so they look normal */
+html.icollege-dark-mode img,
+html.icollege-dark-mode video,
+html.icollege-dark-mode iframe,
+html.icollege-dark-mode canvas,
+html.icollege-dark-mode .d2l-image,
+html.icollege-dark-mode [style*="background-image"],
+html.icollege-dark-mode .d2l-course-banner-container,
+html.icollege-dark-mode d2l-course-image {
+  filter: invert(1) hue-rotate(180deg) !important;
+}
+
+/* Since our custom widget variables already handle native dark mode nicely, 
+   we MUST reverse the inversion on our injected widget, or else the filter 
+   will invert our nicely styled dark-mode widget into a bright white one! */
+html.icollege-dark-mode #icollege-whats-due-widget,
+html.icollege-dark-mode .icollege-hide-btn,
+html.icollege-dark-mode .icollege-mute-btn {
+  filter: invert(1) hue-rotate(180deg) !important;
+}

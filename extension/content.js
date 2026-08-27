@@ -296,7 +296,7 @@ function generateAndDownloadICS(deadlines) {
 
   icsLines.push("END:VCALENDAR");
 
-  const icsString = icsLines.join("\\r\\n");
+  const icsString = icsLines.join("\r\n");
   const blob = new Blob([icsString], { type: 'text/calendar' });
   const url = URL.createObjectURL(blob);
   
@@ -312,3 +312,20 @@ function generateAndDownloadICS(deadlines) {
 }
 
 setTimeout(injectWhatsDueUI, 3000);
+
+// --- Global Dark Mode Engine ---
+chrome.storage.local.get({ globalDarkMode: false }, (data) => {
+  if (data.globalDarkMode) {
+    document.documentElement.classList.add('icollege-dark-mode');
+  }
+});
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'toggle_dark_mode') {
+    if (request.enabled) {
+      document.documentElement.classList.add('icollege-dark-mode');
+    } else {
+      document.documentElement.classList.remove('icollege-dark-mode');
+    }
+  }
+});
