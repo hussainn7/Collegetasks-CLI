@@ -35,56 +35,45 @@ def session_exists() -> bool:
 
 
 def validate_session(page: Page) -> bool:
-    """Navigate to D2L and check if the session is still authenticated.
+    """Check if the saved session is still authenticated against D2L.
 
-    Returns True if the session is valid (we land on a D2L page),
-    False if we get redirected to SSO login.
+    Uses a lightweight API endpoint to avoid full page loads and
+    networkidle waits that can time out on slow connections.
+
+    Returns True if the session is valid, False otherwise.
     """
+    d2l_base = settings.d2l_base_url.rstrip("/")
+
     try:
-        # Navigate to the actual D2L homepage, not the WordPress landing page
-        d2l_home = f"{settings.d2l_base_url.rstrip('/')}/d2l/home"
-        response = page.goto(d2l_home, wait_until="domcontentloaded", timeout=30_000)
+        # Use a lightweight API endpoint — the "whoami" call is fast
+        # and clearly tells us if we're authenticated
+        whoami_url = f"{d2l_base}/d2l/api/lp/1.43/users/whoami"
+        response = page.goto(whoami_url, wait_until="domcontentloaded", timeout=20_000)
 
-        # Wait for any redirects to settle
-        page.wait_for_load_state("networkidle", timeout=15_000)
+        if response:
+            current_url = page.url.lower()
 
+            # If we got redirected to SSO, session is expired
+            if any(marker in current_url for marker in [
+                "idp.gsu.edu", "initiate-login", "shibboleth", "cas/login"
+            ]):
+                return False
+
+            # If API returned 200, we're authenticated
+            if response.status == 200:
+                return True
+
+            # 403 means the cookies are there but the session expired
+            if response.status == 403:
+                return False
+
+        # Fallback: try loading the D2L homepage
+        response2 = page.goto(f"{d2l_base}/d2l/home", wait_until="domcontentloaded", timeout=20_000)
         current_url = page.url.lower()
-        d2l_host = "gastate.view.usg.edu"
 
-        # If we're still on the D2L host and on a real page, session is valid
-        if d2l_host in current_url and "/d2l/" in current_url:
-            # But check we didn't land on the login page
-            if "initiate-login" in current_url or "auth/saml" in current_url:
-                return False
-
-            # Check page title for "Page not found" (404 within D2L)
-            title = page.title().lower()
-            if "not found" in title or "error" in title:
-                # Could be a 404 but still authenticated — try the /d2l/lp/ path
-                lp_url = f"{settings.d2l_base_url.rstrip('/')}/d2l/lp/ouHome.d2l"
-                response2 = page.goto(lp_url, wait_until="domcontentloaded", timeout=15_000)
-                page.wait_for_load_state("networkidle", timeout=10_000)
-                current_url2 = page.url.lower()
-                if d2l_host in current_url2 and "initiate-login" not in current_url2:
-                    return True
-                return False
-
-            return True
-
-        # If we got redirected to an SSO/IdP page, session has expired
-        if any(
-            marker in current_url
-            for marker in ["idp.gsu.edu", "cas/login", "sso", "shibboleth", "initiate-login"]
-        ):
-            return False
-
-        # If we're not on the D2L host at all, something went wrong
-        if d2l_host not in current_url:
-            return False
-
-        # Fallback: check if response was OK
-        if response and response.ok:
-            return True
+        if "gastate.view.usg.edu" in current_url and "/d2l/" in current_url:
+            if "initiate-login" not in current_url:
+                return True
 
         return False
 

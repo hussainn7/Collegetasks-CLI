@@ -147,7 +147,7 @@ def summarize_announcements(
     from google import genai
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    model = "gemini-2.0-flash"
+    model = "gemini-3.6-flash"
 
     groups = _group_by_course(announcements)
     summaries: list[CourseSummary] = []

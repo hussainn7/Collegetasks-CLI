@@ -147,10 +147,14 @@ class AnnouncementDB:
                 f"  [green]→ {len(new_announcements)} new[/green] "
                 f"out of {len(announcements)} total"
             )
+        elif len(announcements) == 0:
+            console.print(
+                "  [yellow]→ Scraper found 0 announcements on the page[/yellow]"
+            )
         else:
             console.print(
-                f"  [dim]→ No new announcements "
-                f"({len(announcements)} already seen)[/dim]"
+                f"  [dim]→ All {len(announcements)} announcement(s) "
+                f"already processed (no new ones)[/dim]"
             )
 
         return new_announcements
