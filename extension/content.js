@@ -214,15 +214,29 @@ async function injectWhatsDueUI() {
   });
   
   // Collapse toggle logic
+  chrome.storage.local.get(['isPanelFolded'], (data) => {
+    const body = document.getElementById('icollege-whats-due-body');
+    const icon = document.getElementById('icollege-collapse-icon');
+    if (data.isPanelFolded) {
+      body.style.display = 'none';
+      icon.innerText = '▶';
+    } else {
+      body.style.display = 'block';
+      icon.innerText = '▼';
+    }
+  });
+
   document.getElementById('icollege-collapse-toggle').addEventListener('click', () => {
     const body = document.getElementById('icollege-whats-due-body');
     const icon = document.getElementById('icollege-collapse-icon');
     if (body.style.display === 'none') {
       body.style.display = 'block';
       icon.innerText = '▼';
+      chrome.storage.local.set({ isPanelFolded: false });
     } else {
       body.style.display = 'none';
       icon.innerText = '▶';
+      chrome.storage.local.set({ isPanelFolded: true });
     }
   });
   
