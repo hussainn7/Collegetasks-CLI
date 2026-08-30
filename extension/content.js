@@ -347,7 +347,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // --- Shadow DOM Dark Mode Fixer ---
 setInterval(() => {
   const isDark = document.documentElement.classList.contains('icollege-dark-mode');
-  const courseImages = querySelectorAllShadows('d2l-course-image, .d2l-course-banner-container');
+  const courseImages = querySelectorAllShadows('img.d2l-organization-image-main, d2l-course-image, .d2l-course-banner-container');
   
   courseImages.forEach(img => {
     if (isDark) {
