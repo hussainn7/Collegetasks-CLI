@@ -344,6 +344,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// --- Shadow DOM Dark Mode Fixer ---
+setInterval(() => {
+  const isDark = document.documentElement.classList.contains('icollege-dark-mode');
+  const courseImages = querySelectorAllShadows('d2l-course-image, .d2l-course-banner-container');
+  
+  courseImages.forEach(img => {
+    if (isDark) {
+      if (img.style.filter !== 'invert(1) hue-rotate(180deg)') {
+        img.style.filter = 'invert(1) hue-rotate(180deg)';
+      }
+    } else {
+      if (img.style.filter === 'invert(1) hue-rotate(180deg)') {
+        img.style.filter = '';
+      }
+    }
+  });
+}, 2000);
+
 // --- AI Announcement Summarization ---
 async function summarizeAnnouncementLocally(el) {
   if (el.hasAttribute('data-ai-summarized')) return;
