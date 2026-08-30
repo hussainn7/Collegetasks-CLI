@@ -171,6 +171,8 @@ html.icollege-dark-mode {
 
 /* Re-invert media and specific elements so they look normal */
 html.icollege-dark-mode img,
+html.icollege-dark-mode picture,
+html.icollege-dark-mode svg,
 html.icollege-dark-mode video,
 html.icollege-dark-mode iframe[src*="youtube"],
 html.icollege-dark-mode iframe[src*="vimeo"],
