@@ -343,3 +343,63 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   }
 });
+
+// --- AI Announcement Summarization ---
+async function summarizeAnnouncementLocally(el) {
+  if (el.hasAttribute('data-ai-summarized')) return;
+  el.setAttribute('data-ai-summarized', 'true');
+  
+  const text = el.innerText || el.textContent;
+  if (!text || text.trim().length < 50) return;
+  
+  // check if local AI is available
+  if (!window.ai) return;
+
+  try {
+    let session;
+    if (window.ai.createTextSession) {
+      session = await window.ai.createTextSession();
+    } else if (window.ai.languageModel && window.ai.languageModel.create) {
+      session = await window.ai.languageModel.create();
+    } else {
+      return;
+    }
+    
+    const prompt = `Read this announcement and extract a 2-3 word TL;DR tag (e.g. [CLASS CANCELED], [DEADLINE EXTENDED], [REMINDER]). Then provide a 1-sentence summary.\n\nText: ${text}`;
+    const result = await session.prompt(prompt);
+    
+    // Extract tag
+    const tagMatch = result.match(/\[.*?\]/);
+    const tag = tagMatch ? tagMatch[0] : '[ANNOUNCEMENT]';
+    const cleanResult = result.replace(tag, '').trim();
+    
+    const isUrgent = tag.toUpperCase().includes('CANCEL') || tag.toUpperCase().includes('EXTEND') || tag.toUpperCase().includes('DUE') || tag.toUpperCase().includes('URGENT');
+    const color = isUrgent ? '#ef4444' : '#10b981'; // Red for urgent, Green otherwise
+    
+    const summaryDiv = document.createElement('div');
+    summaryDiv.style.cssText = `
+      background: #f8fafc; 
+      border-left: 4px solid ${color}; 
+      padding: 12px; 
+      margin-bottom: 15px; 
+      border-radius: 4px; 
+      font-family: -apple-system, sans-serif;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    `;
+    
+    summaryDiv.innerHTML = `
+      <div style="font-weight: 900; color: ${color}; font-size: 14px; margin-bottom: 6px; letter-spacing: 0.5px;">✨ AI SUMMARY ${tag}</div>
+      <div style="font-size: 13px; color: #334155; line-height: 1.4;">${cleanResult}</div>
+    `;
+    
+    el.insertBefore(summaryDiv, el.firstChild);
+    
+  } catch(e) {
+    console.error("Local AI Summarization failed", e);
+  }
+}
+
+setInterval(() => {
+  const items = querySelectorAllShadows('.d2l-datalist-item, .news-item, .announcement-card, d2l-html-block');
+  items.forEach(summarizeAnnouncementLocally);
+}, 3000);
