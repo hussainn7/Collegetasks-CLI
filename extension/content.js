@@ -428,7 +428,7 @@ async function physicalScrape(coursesToScan) {
       const text = (item.innerText || item.textContent || "").trim();
       if (text && text.length > 20) {
         newAnnouncements.push({
-          Id: Math.random().toString(), 
+          Id: text.substring(0, 40).replace(/[^a-zA-Z0-9]/g, ''), 
           Title: "Announcement",
           Body: text.substring(0, 500) + (text.length > 500 ? '...' : ''),
           Course: course.name,
@@ -457,7 +457,7 @@ async function physicalScrape(coursesToScan) {
          const dateObj = new Date(dateMatch[1]);
          if (!isNaN(dateObj) && dateObj > new Date() - 7 * 24 * 60 * 60 * 1000) {
            hiddenDeadlines.push({
-             id: Math.random(),
+             id: titleMatch.replace(/[^a-zA-Z0-9]/g, '') + dateObj.getTime(),
              title: titleMatch || 'Unknown Module Item',
              course: course.name,
              date: dateObj.toLocaleString(),

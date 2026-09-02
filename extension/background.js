@@ -19,66 +19,74 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function processPhysicalScan(newAnnouncements, hiddenDeadlines) {
-  chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId', 'deepScanDeadlines'], async (data) => {
-    const processed = new Set(data.processedAnnouncements || []);
-    const hidden = new Set(data.hiddenCourses || []);
-    
-    // Process Announcements
-    const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
+  try {
+    chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId', 'deepScanDeadlines'], async (data) => {
+      const processed = new Set(data.processedAnnouncements || []);
+      const hidden = new Set(data.hiddenCourses || []);
+      
+      const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
+      
+      let allScrapedText = "";
 
-    if (trulyNew.length > 0) {
-      sendLog(`[Scanner] Found ${trulyNew.length} new announcements! Processing...`);
-
-      const announcementsByCourse = {};
-      for (const ann of trulyNew) {
-        if (!announcementsByCourse[ann.Course]) {
-          announcementsByCourse[ann.Course] = [];
-        }
-        announcementsByCourse[ann.Course].push(ann);
+      if (trulyNew.length > 0) {
+        sendLog(`[Scanner] Found ${trulyNew.length} new announcements! Processing...`);
+        allScrapedText += "--- NEW ANNOUNCEMENTS ---\n";
+        trulyNew.forEach(a => {
+          allScrapedText += `Course: ${a.Course}\nText: ${a.Body}\n\n`;
+          processed.add(a.Id);
+        });
+      } else {
+         sendLog("[Scanner] No new announcements found.");
       }
 
-      for (const [courseName, anns] of Object.entries(announcementsByCourse)) {
-        let combinedText = anns.map(a => `Title: ${a.Title}\nBody: ${a.Body}`).join('\n\n---\n\n');
-        let summary = combinedText;
+      let existingDeadlines = data.deepScanDeadlines || [];
+      let trulyNewDeadlines = [];
+      if (hiddenDeadlines.length > 0) {
+        hiddenDeadlines.forEach(hd => {
+          if (!existingDeadlines.find(e => e.id === hd.id)) {
+            existingDeadlines.push(hd);
+            trulyNewDeadlines.push(hd);
+          }
+        });
+        chrome.storage.local.set({ deepScanDeadlines: existingDeadlines });
+        sendLog(`[Scanner] Saved ${hiddenDeadlines.length} physical deadlines to storage.`);
+        
+        if (trulyNewDeadlines.length > 0) {
+          allScrapedText += "--- NEW UPCOMING DEADLINES ---\n";
+          trulyNewDeadlines.forEach(d => {
+            allScrapedText += `Course: ${d.course}\nTask: ${d.title}\nDue: ${d.date}\n\n`;
+          });
+        }
+      }
+
+      // If we have any new data, send a consolidated To-Do list
+      if (allScrapedText.trim().length > 0) {
+        let finalMessage = allScrapedText;
         
         if (data.geminiKey) {
-          sendLog(`[Scanner] Summarizing ${anns.length} announcements for ${courseName}...`);
-          summary = await summarizeWithGemini(combinedText, data.geminiKey);
+          sendLog(`[Scanner] Generating consolidated To-Do list with Gemini...`);
+          finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
         }
         
         if (data.tgChatId) {
-          sendLog(`[Scanner] Sending Telegram notification to ${data.tgChatId}...`);
-          await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Announcements in ${courseName}*\n\n${summary}`);
+          sendLog(`[Scanner] Sending Telegram To-Do list...`);
+          await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Updates from iCollege!*\n\n${finalMessage}`);
+          sendLog(`[Scanner] Telegram notification sent successfully!`);
         } else {
-          sendLog(`[Scanner] Telegram Chat ID not set! Summary: ${summary.substring(0,30)}...`);
+          sendLog(`[Scanner] Telegram Chat ID not set! Output: ${finalMessage.substring(0,30)}...`);
         }
-        
-        anns.forEach(a => processed.add(a.Id));
       }
-    } else {
-       sendLog("[Scanner] No new announcements found.");
-    }
 
-    // Process Deadlines
-    if (hiddenDeadlines.length > 0) {
-      let existingDeadlines = data.deepScanDeadlines || [];
-      hiddenDeadlines.forEach(hd => {
-        // deduplicate by title and course
-        if (!existingDeadlines.find(e => e.title === hd.title && e.course === hd.course)) {
-          existingDeadlines.push(hd);
-        }
+      chrome.storage.local.set({ 
+        processedAnnouncements: Array.from(processed),
+        lastScanTime: Date.now()
       });
-      chrome.storage.local.set({ deepScanDeadlines: existingDeadlines });
-      sendLog(`[Scanner] Saved ${hiddenDeadlines.length} physical deadlines to storage.`);
-    }
-
-    chrome.storage.local.set({ 
-      processedAnnouncements: Array.from(processed),
-      lastScanTime: Date.now()
+      
+      sendLog("[Scanner] Physical scan and sync complete! You are all caught up. 🎉");
     });
-    
-    sendLog("[Scanner] Physical scan and sync complete! You are all caught up. 🎉");
-  });
+  } catch (err) {
+    sendLog(`[Scanner] Critical error in processing: ${err.message}`);
+  }
 }
 
 async function summarizeWithGemini(text, apiKey) {
@@ -87,7 +95,7 @@ async function summarizeWithGemini(text, apiKey) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: "Summarize this announcement briefly: " + text }] }]
+        contents: [{ parts: [{ text: "Extract all tasks, assignments, and important actionable information from the following text and create a concise, structured To-Do list. Format it clearly with bullet points and bold text for course names. Do not write a long paragraph. If there is nothing actionable, just summarize the updates briefly.\n\n" + text }] }]
       })
     });
     const result = await response.json();
