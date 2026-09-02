@@ -376,15 +376,106 @@ function triggerScan(specificCourseList = null) {
     });
   }
 
-  let bearerToken = null;
-  try {
-    const d2lTokens = JSON.parse(localStorage.getItem('D2L.Fetch.Tokens') || '{}');
-    if (d2lTokens['*:*:*'] && d2lTokens['*:*:*'].access_token) {
-      bearerToken = d2lTokens['*:*:*'].access_token;
-    }
-  } catch(e) {}
+  physicalScrape(coursesToScan);
+}
 
-  chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan, token: bearerToken });
+function logToWidget(msg) {
+  const logContainer = document.getElementById('icollege-scanner-logs');
+  if (logContainer) {
+    const div = document.createElement('div');
+    div.innerText = msg;
+    logContainer.appendChild(div);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+}
+
+function loadIframeUrl(iframe, url) {
+  return new Promise((resolve) => {
+    iframe.onload = () => resolve();
+    iframe.src = url;
+  });
+}
+
+async function physicalScrape(coursesToScan) {
+  if (coursesToScan.length === 0) {
+    logToWidget("[Scraper] No courses to scan.");
+    return;
+  }
+
+  let iframe = document.getElementById('icollege-scraper-frame');
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'icollege-scraper-frame';
+    iframe.style.cssText = 'width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; left: -9999px;';
+    document.body.appendChild(iframe);
+  }
+
+  let newAnnouncements = [];
+  let hiddenDeadlines = [];
+
+  for (const course of coursesToScan) {
+    logToWidget(`[Scraper] Physically loading Homepage for ${course.name}...`);
+    
+    // 1. Scrape Announcements (Homepage)
+    await loadIframeUrl(iframe, `https://gastate.view.usg.edu/d2l/home/${course.id}`);
+    await new Promise(r => setTimeout(r, 2000)); // wait for components
+    
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    const newsItems = Array.from(querySelectorAllShadows('.d2l-widget-content-padding .d2l-datalist-item, .d2l-widget .vui-list-item, d2l-html-block', doc.body));
+    logToWidget(`[Scraper] Found ${newsItems.length} potential announcement blocks.`);
+    
+    newsItems.forEach(item => {
+      const text = (item.innerText || item.textContent || "").trim();
+      if (text && text.length > 20) {
+        newAnnouncements.push({
+          Id: Math.random().toString(), 
+          Title: "Announcement",
+          Body: text.substring(0, 500) + (text.length > 500 ? '...' : ''),
+          Course: course.name,
+          CourseId: course.id
+        });
+      }
+    });
+
+    // 2. Scrape Modules (Content Page)
+    logToWidget(`[Scraper] Physically loading Modules for ${course.name}...`);
+    await loadIframeUrl(iframe, `https://gastate.view.usg.edu/d2l/le/content/${course.id}/Home`);
+    await new Promise(r => setTimeout(r, 3000)); // wait for modules
+    
+    const contentDoc = iframe.contentDocument || iframe.contentWindow.document;
+    
+    // Look for items with due dates (Shadow DOM piercing inside iframe)
+    const modules = querySelectorAllShadows('.d2l-datalist-item, .d2l-collapsepane, li, d2l-list-item', contentDoc.body);
+    let foundDeadlines = 0;
+    
+    modules.forEach(node => {
+      const text = node.innerText || node.textContent || "";
+      // Regex for Due Date: e.g. "Due September 12 at 11:59 PM" or "Due: Sep 12, 11:59 PM"
+      const dateMatch = text.match(/Due\s*(?:Date)?\s*[:-]?\s*([A-Za-z]+\s+\d{1,2}.*?(?:AM|PM))/i);
+      if (dateMatch) {
+         const titleMatch = text.split('\\n')[0].trim();
+         const dateObj = new Date(dateMatch[1]);
+         if (!isNaN(dateObj) && dateObj > new Date() - 7 * 24 * 60 * 60 * 1000) {
+           hiddenDeadlines.push({
+             id: Math.random(),
+             title: titleMatch || 'Unknown Module Item',
+             course: course.name,
+             date: dateObj.toLocaleString(),
+             type: 'Module Item'
+           });
+           foundDeadlines++;
+         }
+      }
+    });
+    logToWidget(`[Scraper] Found ${foundDeadlines} upcoming deadlines via DOM.`);
+  }
+
+  logToWidget(`[Scraper] Physical scan complete. Forwarding to background...`);
+  chrome.runtime.sendMessage({
+    action: 'process_physical_scan',
+    announcements: newAnnouncements,
+    deadlines: hiddenDeadlines
+  });
 }
 
 // Listen for logs from background script
