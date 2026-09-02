@@ -13,80 +13,89 @@ function sendLog(msg) {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'process_physical_scan') {
-    processPhysicalScan(request.announcements || [], request.deadlines || []).catch(err => sendLog("[Scanner] Error: " + err.message));
-    sendResponse({ status: 'processing' });
+    processPhysicalScan(request.announcements || [], request.deadlines || [])
+      .then(() => sendLog("[Scanner] Background processing finished."))
+      .catch(err => sendLog("[Scanner] Error: " + err.message));
+    return true; // keep message channel open for async work
   }
 });
 
 async function processPhysicalScan(newAnnouncements, hiddenDeadlines) {
-  try {
-    chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId', 'deepScanDeadlines'], async (data) => {
-      const processed = new Set(data.processedAnnouncements || []);
-      const hidden = new Set(data.hiddenCourses || []);
-      
-      const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
-      
-      let allScrapedText = "";
+  sendLog("[Scanner] Background received data. Processing...");
+  
+  // Use Promise form (no callback) so await actually works in MV3
+  const data = await chrome.storage.local.get([
+    'processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId', 'deepScanDeadlines'
+  ]);
 
-      if (trulyNew.length > 0) {
-        sendLog(`[Scanner] Found ${trulyNew.length} new announcements! Processing...`);
-        allScrapedText += "--- NEW ANNOUNCEMENTS ---\n";
-        trulyNew.forEach(a => {
-          allScrapedText += `Course: ${a.Course}\nText: ${a.Body}\n\n`;
-          processed.add(a.Id);
-        });
-      } else {
-         sendLog("[Scanner] No new announcements found.");
-      }
+  const processed = new Set(data.processedAnnouncements || []);
+  const hidden = new Set(data.hiddenCourses || []);
+  
+  const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
+  
+  let allScrapedText = "";
 
-      let existingDeadlines = data.deepScanDeadlines || [];
-      let trulyNewDeadlines = [];
-      if (hiddenDeadlines.length > 0) {
-        hiddenDeadlines.forEach(hd => {
-          if (!existingDeadlines.find(e => e.id === hd.id)) {
-            existingDeadlines.push(hd);
-            trulyNewDeadlines.push(hd);
-          }
-        });
-        chrome.storage.local.set({ deepScanDeadlines: existingDeadlines });
-        sendLog(`[Scanner] Saved ${hiddenDeadlines.length} physical deadlines to storage.`);
-        
-        if (trulyNewDeadlines.length > 0) {
-          allScrapedText += "--- NEW UPCOMING DEADLINES ---\n";
-          trulyNewDeadlines.forEach(d => {
-            allScrapedText += `Course: ${d.course}\nTask: ${d.title}\nDue: ${d.date}\n\n`;
-          });
-        }
-      }
-
-      // If we have any new data, send a consolidated To-Do list
-      if (allScrapedText.trim().length > 0) {
-        let finalMessage = allScrapedText;
-        
-        if (data.geminiKey) {
-          sendLog(`[Scanner] Generating consolidated To-Do list with Gemini...`);
-          finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
-        }
-        
-        if (data.tgChatId) {
-          sendLog(`[Scanner] Sending Telegram To-Do list...`);
-          await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Updates from iCollege!*\n\n${finalMessage}`);
-          sendLog(`[Scanner] Telegram notification sent successfully!`);
-        } else {
-          sendLog(`[Scanner] Telegram Chat ID not set! Output: ${finalMessage.substring(0,30)}...`);
-        }
-      }
-
-      chrome.storage.local.set({ 
-        processedAnnouncements: Array.from(processed),
-        lastScanTime: Date.now()
-      });
-      
-      sendLog("[Scanner] Physical scan and sync complete! You are all caught up. 🎉");
+  if (trulyNew.length > 0) {
+    sendLog(`[Scanner] Found ${trulyNew.length} new announcements!`);
+    allScrapedText += "--- NEW ANNOUNCEMENTS ---\n";
+    trulyNew.forEach(a => {
+      allScrapedText += `Course: ${a.Course}\nText: ${a.Body}\n\n`;
+      processed.add(a.Id);
     });
-  } catch (err) {
-    sendLog(`[Scanner] Critical error in processing: ${err.message}`);
+  } else {
+    sendLog("[Scanner] No new announcements found.");
   }
+
+  // Process Deadlines
+  let existingDeadlines = data.deepScanDeadlines || [];
+  let trulyNewDeadlines = [];
+  if (hiddenDeadlines.length > 0) {
+    hiddenDeadlines.forEach(hd => {
+      if (!existingDeadlines.find(e => e.id === hd.id)) {
+        existingDeadlines.push(hd);
+        trulyNewDeadlines.push(hd);
+      }
+    });
+    await chrome.storage.local.set({ deepScanDeadlines: existingDeadlines });
+    sendLog(`[Scanner] Saved ${hiddenDeadlines.length} physical deadlines.`);
+    
+    if (trulyNewDeadlines.length > 0) {
+      allScrapedText += "--- NEW UPCOMING DEADLINES ---\n";
+      trulyNewDeadlines.forEach(d => {
+        allScrapedText += `Course: ${d.course}\nTask: ${d.title}\nDue: ${d.date}\n\n`;
+      });
+    }
+  }
+
+  // If we have any new data, send a consolidated To-Do list
+  if (allScrapedText.trim().length > 0) {
+    let finalMessage = allScrapedText;
+    
+    if (data.geminiKey) {
+      sendLog("[Scanner] Generating To-Do list with Gemini...");
+      finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
+      sendLog("[Scanner] Gemini response received.");
+    } else {
+      sendLog("[Scanner] No Gemini key set, sending raw text.");
+    }
+    
+    if (data.tgChatId) {
+      sendLog("[Scanner] Sending Telegram To-Do list...");
+      await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Updates from iCollege!*\n\n${finalMessage}`);
+      sendLog("[Scanner] ✅ Telegram notification sent successfully!");
+    } else {
+      sendLog("[Scanner] ⚠️ Telegram Chat ID not set! Cannot send notification.");
+    }
+  } else {
+    sendLog("[Scanner] Nothing new to report this scan.");
+  }
+
+  await chrome.storage.local.set({ 
+    processedAnnouncements: Array.from(processed),
+    lastScanTime: Date.now()
+  });
+  
+  sendLog("[Scanner] Physical scan and sync complete! 🎉");
 }
 
 async function summarizeWithGemini(text, apiKey) {
@@ -107,13 +116,13 @@ async function summarizeWithGemini(text, apiKey) {
     }
   } catch (e) {
     console.error("Gemini API error:", e);
-    return text; // Fallback to raw text
+    return text;
   }
 }
 
 async function sendTelegram(token, chatId, text) {
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -122,8 +131,12 @@ async function sendTelegram(token, chatId, text) {
         parse_mode: 'Markdown'
       })
     });
+    const json = await res.json();
+    if (!json.ok) {
+      sendLog(`[Scanner] Telegram API error: ${JSON.stringify(json)}`);
+    }
   } catch (e) {
     console.error("Telegram API error:", e);
+    sendLog(`[Scanner] Telegram network error: ${e.message}`);
   }
-
-
+}

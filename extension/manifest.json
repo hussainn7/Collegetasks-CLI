@@ -4,10 +4,13 @@
   "version": "1.0.0",
   "description": "Unified 'What's Due' checklist, class hider, and Google Calendar sync for iCollege.",
   "permissions": [
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
-    "https://gastate.view.usg.edu/*"
+    "https://gastate.view.usg.edu/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.telegram.org/*"
   ],
   "action": {
     "default_popup": "popup.html",
