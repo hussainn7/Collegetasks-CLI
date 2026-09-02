@@ -264,34 +264,7 @@ async function injectWhatsDueUI() {
     generateAndDownloadICS(deadlines);
   });
   
-  // Try to render API notifications if they exist
-  setTimeout(() => {
-    chrome.storage.local.get(['recentAlerts'], (data) => {
-      if (data.recentAlerts) {
-        const alertsList = Array.isArray(data.recentAlerts) ? data.recentAlerts : (data.recentAlerts.Objects || data.recentAlerts.Items || []);
-        
-        if (alertsList && alertsList.length > 0) {
-          const badgeEl = document.getElementById('icollege-alert-badge');
-          badgeEl.textContent = alertsList.length + ' Alerts';
-          badgeEl.style.display = 'inline-block';
-          
-          const list = document.querySelector('.whats-due-list');
-          alertsList.forEach(alert => {
-            const li = document.createElement('li');
-            li.innerHTML = `
-              <div style="padding: 10px; background: #fff1f2; border-left: 3px solid #ef4444; margin-bottom: 8px; font-size: 12px;">
-                <strong>🔔 Alert</strong>
-                <div style="color: #475569; margin-top: 4px;">${alert.Title || alert.Message || alert.Description || JSON.stringify(alert).substring(0,50)}</div>
-              </div>
-            `;
-            list.prepend(li); // put alerts at the top
-          });
-        }
-      }
-    });
-  }, 2500);
-  
-  // Try to find the top notifications / alerts badge (Fallback)
+  // Try to find the top notifications / alerts badge via DOM
   setTimeout(() => {
     const alertBtn = document.querySelector('button[aria-label^="Update alerts"], button[id^="d2l-"][aria-label*="alerts"]');
     if (alertBtn) {
@@ -304,7 +277,6 @@ async function injectWhatsDueUI() {
       if (match) {
         count = parseInt(match[1], 10);
       } else if (badgeIndicator && !badgeIndicator.hidden && window.getComputedStyle(badgeIndicator).display !== 'none') {
-        // sometimes there's just a dot indicator
         count = '!';
       }
       
@@ -312,9 +284,29 @@ async function injectWhatsDueUI() {
         const badgeEl = document.getElementById('icollege-alert-badge');
         badgeEl.textContent = count + ' Alerts';
         badgeEl.style.display = 'inline-block';
+        
+        // Also try to find already-rendered notification text in the DOM if the dropdown is cached/open
+        const alertTexts = querySelectorAllShadows('d2l-menu-item-link, .d2l-datalist-item-content');
+        if (alertTexts.length > 0) {
+           const list = document.querySelector('.whats-due-list');
+           // Take up to 3 alerts
+           Array.from(alertTexts).slice(0, 3).forEach(el => {
+              const text = el.innerText.trim();
+              if (text && text.length > 5) {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                  <div style="padding: 10px; background: #fff1f2; border-left: 3px solid #ef4444; margin-bottom: 8px; font-size: 12px;">
+                    <strong>🔔 Alert</strong>
+                    <div style="color: #475569; margin-top: 4px;">${text.split('\\n')[0]}</div>
+                  </div>
+                `;
+                list.prepend(li);
+              }
+           });
+        }
       }
     }
-  }, 2000);
+  }, 2500);
   
   // Collapse toggle logic
   chrome.storage.local.get(['isPanelFolded'], (data) => {
