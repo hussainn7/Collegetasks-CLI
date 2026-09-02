@@ -384,7 +384,15 @@ function triggerScan(specificCourseList = null) {
     });
   }
 
-  chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan });
+  let bearerToken = null;
+  try {
+    const d2lTokens = JSON.parse(localStorage.getItem('D2L.Fetch.Tokens') || '{}');
+    if (d2lTokens['*:*:*'] && d2lTokens['*:*:*'].access_token) {
+      bearerToken = d2lTokens['*:*:*'].access_token;
+    }
+  } catch(e) {}
+
+  chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan, token: bearerToken });
 }
 
 // Listen for logs from background script

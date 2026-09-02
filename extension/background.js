@@ -13,12 +13,12 @@ function sendLog(msg) {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'scan_announcements') {
-    runScanner(request.courses || []).catch(err => sendLog("[Scanner] Error: " + err.message));
+    runScanner(request.courses || [], request.token).catch(err => sendLog("[Scanner] Error: " + err.message));
     sendResponse({ status: 'scanning' });
   }
 });
 
-async function runScanner(courses) {
+async function runScanner(courses, bearerToken) {
   sendLog("[Scanner] Starting background scan...");
   
   if (!courses || courses.length === 0) {
@@ -32,7 +32,12 @@ async function runScanner(courses) {
   for (const course of courses) {
     try {
       sendLog(`[Scanner] Checking course: ${course.name}...`);
-      const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/news/`);
+      const headers = {};
+      if (bearerToken) {
+        headers['Authorization'] = `Bearer ${bearerToken}`;
+      }
+      
+      const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/news/`, { headers });
       
       if (response.ok) {
         const news = await response.json();
@@ -52,7 +57,7 @@ async function runScanner(courses) {
       }
 
       // Deep scan modules for hidden assignments
-      await deepScanCourseModules(course);
+      await deepScanCourseModules(course, bearerToken);
       
     } catch (e) {
       sendLog(`[Scanner] Error fetching course ${course.name}: ${e.message}`);
@@ -62,12 +67,17 @@ async function runScanner(courses) {
   // Fetch Notifications/Alerts
   try {
     sendLog("[Scanner] Fetching top notifications/alerts...");
-    const whoamiRes = await fetch("https://gastate.view.usg.edu/d2l/api/lp/1.43/users/whoami");
+    const headers = {};
+    if (bearerToken) {
+      headers['Authorization'] = `Bearer ${bearerToken}`;
+    }
+    
+    const whoamiRes = await fetch("https://gastate.view.usg.edu/d2l/api/lp/1.43/users/whoami", { headers });
     if (whoamiRes.ok) {
       const user = await whoamiRes.json();
       const userId = user.Identifier;
       
-      const alertRes = await fetch(`https://gastate.view.usg.edu/d2l/api/lp/1.43/alerts/user/${userId}?category=Update`);
+      const alertRes = await fetch(`https://gastate.view.usg.edu/d2l/api/lp/1.43/alerts/user/${userId}?category=Update`, { headers });
       if (alertRes.ok) {
         const alerts = await alertRes.json();
         chrome.storage.local.set({ recentAlerts: alerts });
@@ -171,10 +181,14 @@ async function sendTelegram(token, chatId, text) {
   }
 }
 
-async function deepScanCourseModules(course) {
+async function deepScanCourseModules(course, bearerToken) {
   sendLog(`[Scanner] Deep scanning modules for ${course.name}...`);
   try {
-    const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/content/toc`);
+    const headers = {};
+    if (bearerToken) {
+      headers['Authorization'] = `Bearer ${bearerToken}`;
+    }
+    const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/content/toc`, { headers });
     if (!response.ok) return;
     
     const toc = await response.json();
