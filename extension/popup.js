@@ -1,10 +1,14 @@
 document.addEventListener('DOMContentLoaded', () => {
   // Load saved settings
-  chrome.storage.local.get(['tgChatId', 'geminiKey', 'globalDarkMode'], (result) => {
+  chrome.storage.local.get(['tgChatId', 'geminiKey', 'globalDarkMode', 'lastScanTime'], (result) => {
     if (result.tgChatId) document.getElementById('tgChatId').value = result.tgChatId;
     if (result.geminiKey) document.getElementById('geminiKey').value = result.geminiKey;
     if (result.globalDarkMode !== undefined) {
       document.getElementById('globalDarkMode').checked = result.globalDarkMode;
+    }
+    if (result.lastScanTime) {
+      const date = new Date(result.lastScanTime);
+      document.getElementById('lastScanTime').textContent = date.toLocaleString();
     }
   });
 
