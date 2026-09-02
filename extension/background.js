@@ -59,6 +59,20 @@ async function runScanner(courses) {
     }
   }
 
+  // Fetch Notifications/Alerts
+  try {
+    sendLog("[Scanner] Fetching top notifications/alerts...");
+    const alertRes = await fetch("https://gastate.view.usg.edu/d2l/api/lp/1.43/alerts/");
+    if (alertRes.ok) {
+      const alerts = await alertRes.json();
+      chrome.storage.local.set({ recentAlerts: alerts.map ? alerts : [] });
+    } else {
+      sendLog("[Scanner] Failed to fetch alerts (maybe no permission or wrong API).");
+    }
+  } catch (e) {
+    sendLog(`[Scanner] Error fetching alerts: ${e.message}`);
+  }
+
   // 3. Filter against "database" (chrome.storage.local) and ignore hidden courses
   chrome.storage.local.get(['processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'], async (data) => {
     const processed = new Set(data.processedAnnouncements || []);
@@ -68,6 +82,7 @@ async function runScanner(courses) {
 
     if (trulyNew.length === 0) {
       sendLog("[Scanner] No new announcements found.");
+      chrome.storage.local.set({ lastScanTime: Date.now() });
       return;
     }
 
@@ -161,6 +176,8 @@ async function deepScanCourseModules(course) {
     function parseNodes(nodes) {
       if (!nodes) return;
       nodes.forEach(node => {
+        sendLog(`[Debug] Traversing: ${node.Title} (Type: ${node.TypeIdentifier || 'Module'})`);
+        
         // If it's a topic (Quiz, Dropbox, Discussion) with a DueDate or EndDate
         if (node.TopicType === 1 || node.TopicType === 3 || node.TypeIdentifier) {
           const dateStr = node.DueDate || node.EndDate;
@@ -169,6 +186,7 @@ async function deepScanCourseModules(course) {
             const now = new Date();
             // Only care about future or recently past deadlines
             if (dateObj > now - 7 * 24 * 60 * 60 * 1000) {
+              sendLog(`[Debug] -> Added deadline for: ${node.Title} (Due: ${dateStr})`);
               hiddenDeadlines.push({
                 id: node.TopicId || Math.random(),
                 title: node.Title,
@@ -176,6 +194,8 @@ async function deepScanCourseModules(course) {
                 date: dateObj.toLocaleString(),
                 type: node.TypeIdentifier || 'Module Item'
               });
+            } else {
+              sendLog(`[Debug] -> Skipped ${node.Title} (Date too old: ${dateStr})`);
             }
           }
         }

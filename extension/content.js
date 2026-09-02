@@ -111,6 +111,28 @@ function initHideClasses() {
         }
         
         card.appendChild(hideBtn);
+
+        // --- Debug Scan Button ---
+        if (!card.querySelector('.icollege-debug-btn')) {
+          const debugBtn = document.createElement('button');
+          debugBtn.innerText = 'Debug Scan';
+          debugBtn.className = 'icollege-debug-btn';
+          debugBtn.style.cssText = btnStyle + 'right: 60px !important; background-color: #fef08a !important; color: #854d0e !important; border-color: #fde047 !important;';
+          
+          debugBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
+            const courseName = rawText.split('\n')[0] || `Course ${courseId.replace('/d2l/home/', '')}`;
+            triggerScan([{ id: courseId.replace('/d2l/home/', ''), name: courseName }]);
+          }, true);
+          
+          debugBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+          card.appendChild(debugBtn);
+        }
       });
     }, 2000);
   });
@@ -190,7 +212,7 @@ async function injectWhatsDueUI() {
         <span id="icollege-alert-badge" style="display:none; margin-left: 8px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 10px; font-weight: bold;"></span>
       </h2>
       <div style="display: flex; gap: 8px;">
-        <button id="icollege-scan-btn" class="calendar-btn">Scan Announcements</button>
+        <button id="icollege-scan-btn" class="calendar-btn">Sync & Scan Everything</button>
         <button id="icollege-calendar-sync-btn" class="calendar-btn">Sync Calendar</button>
       </div>
     </div>
@@ -242,7 +264,30 @@ async function injectWhatsDueUI() {
     generateAndDownloadICS(deadlines);
   });
   
-  // Try to find the top notifications / alerts badge
+  // Try to render API notifications if they exist
+  setTimeout(() => {
+    chrome.storage.local.get(['recentAlerts'], (data) => {
+      if (data.recentAlerts && data.recentAlerts.length > 0) {
+        const badgeEl = document.getElementById('icollege-alert-badge');
+        badgeEl.textContent = data.recentAlerts.length + ' Alerts';
+        badgeEl.style.display = 'inline-block';
+        
+        const list = document.querySelector('.whats-due-list');
+        data.recentAlerts.forEach(alert => {
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <div style="padding: 10px; background: #fff1f2; border-left: 3px solid #ef4444; margin-bottom: 8px; font-size: 12px;">
+              <strong>🔔 Alert</strong>
+              <div style="color: #475569; margin-top: 4px;">${alert.Title || alert.Message || JSON.stringify(alert).substring(0,50)}</div>
+            </div>
+          `;
+          list.prepend(li); // put alerts at the top
+        });
+      }
+    });
+  }, 2500);
+  
+  // Try to find the top notifications / alerts badge (Fallback)
   setTimeout(() => {
     const alertBtn = document.querySelector('button[aria-label^="Update alerts"], button[id^="d2l-"][aria-label*="alerts"]');
     if (alertBtn) {
@@ -310,26 +355,30 @@ async function injectWhatsDueUI() {
   }
 }
 
-function triggerScan() {
+function triggerScan(specificCourseList = null) {
   const logContainer = document.getElementById('icollege-scanner-logs');
   if (logContainer) {
     logContainer.style.display = 'block';
-    logContainer.innerHTML = '<div><em>Starting scan...</em></div>';
+    logContainer.innerHTML = `<div><em>Starting scan ${specificCourseList ? '(Debug Mode)' : ''}...</em></div>`;
   }
   
-  // Scrape active courses from dashboard
-  const coursesToScan = [];
-  const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
-  links.forEach(link => {
-    const match = link.getAttribute('href').match(/\/d2l\/home\/(\d+)/);
-    if (match) {
-      const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
-      const courseName = rawText.split('\n')[0] || `Course ${match[1]}`;
-      if (!coursesToScan.find(c => c.id === match[1])) {
-        coursesToScan.push({ id: match[1], name: courseName });
+  // Scrape active courses from dashboard if not provided
+  let coursesToScan = [];
+  if (specificCourseList) {
+    coursesToScan = specificCourseList;
+  } else {
+    const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
+    links.forEach(link => {
+      const match = link.getAttribute('href').match(/\/d2l\/home\/(\d+)/);
+      if (match) {
+        const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
+        const courseName = rawText.split('\n')[0] || `Course ${match[1]}`;
+        if (!coursesToScan.find(c => c.id === match[1])) {
+          coursesToScan.push({ id: match[1], name: courseName });
+        }
       }
-    }
-  });
+    });
+  }
 
   chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan });
 }
