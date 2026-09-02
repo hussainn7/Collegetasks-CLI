@@ -62,12 +62,20 @@ async function runScanner(courses) {
   // Fetch Notifications/Alerts
   try {
     sendLog("[Scanner] Fetching top notifications/alerts...");
-    const alertRes = await fetch("https://gastate.view.usg.edu/d2l/api/lp/1.43/alerts/");
-    if (alertRes.ok) {
-      const alerts = await alertRes.json();
-      chrome.storage.local.set({ recentAlerts: alerts.map ? alerts : [] });
+    const whoamiRes = await fetch("https://gastate.view.usg.edu/d2l/api/lp/1.43/users/whoami");
+    if (whoamiRes.ok) {
+      const user = await whoamiRes.json();
+      const userId = user.Identifier;
+      
+      const alertRes = await fetch(`https://gastate.view.usg.edu/d2l/api/lp/1.43/alerts/user/${userId}?category=Update`);
+      if (alertRes.ok) {
+        const alerts = await alertRes.json();
+        chrome.storage.local.set({ recentAlerts: alerts });
+      } else {
+        sendLog(`[Scanner] Failed to fetch alerts for user ${userId} (Status: ${alertRes.status})`);
+      }
     } else {
-      sendLog("[Scanner] Failed to fetch alerts (maybe no permission or wrong API).");
+      sendLog(`[Scanner] Failed to fetch whoami (Status: ${whoamiRes.status})`);
     }
   } catch (e) {
     sendLog(`[Scanner] Error fetching alerts: ${e.message}`);

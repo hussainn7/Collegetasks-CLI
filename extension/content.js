@@ -267,22 +267,26 @@ async function injectWhatsDueUI() {
   // Try to render API notifications if they exist
   setTimeout(() => {
     chrome.storage.local.get(['recentAlerts'], (data) => {
-      if (data.recentAlerts && data.recentAlerts.length > 0) {
-        const badgeEl = document.getElementById('icollege-alert-badge');
-        badgeEl.textContent = data.recentAlerts.length + ' Alerts';
-        badgeEl.style.display = 'inline-block';
+      if (data.recentAlerts) {
+        const alertsList = Array.isArray(data.recentAlerts) ? data.recentAlerts : (data.recentAlerts.Objects || data.recentAlerts.Items || []);
         
-        const list = document.querySelector('.whats-due-list');
-        data.recentAlerts.forEach(alert => {
-          const li = document.createElement('li');
-          li.innerHTML = `
-            <div style="padding: 10px; background: #fff1f2; border-left: 3px solid #ef4444; margin-bottom: 8px; font-size: 12px;">
-              <strong>🔔 Alert</strong>
-              <div style="color: #475569; margin-top: 4px;">${alert.Title || alert.Message || JSON.stringify(alert).substring(0,50)}</div>
-            </div>
-          `;
-          list.prepend(li); // put alerts at the top
-        });
+        if (alertsList && alertsList.length > 0) {
+          const badgeEl = document.getElementById('icollege-alert-badge');
+          badgeEl.textContent = alertsList.length + ' Alerts';
+          badgeEl.style.display = 'inline-block';
+          
+          const list = document.querySelector('.whats-due-list');
+          alertsList.forEach(alert => {
+            const li = document.createElement('li');
+            li.innerHTML = `
+              <div style="padding: 10px; background: #fff1f2; border-left: 3px solid #ef4444; margin-bottom: 8px; font-size: 12px;">
+                <strong>🔔 Alert</strong>
+                <div style="color: #475569; margin-top: 4px;">${alert.Title || alert.Message || alert.Description || JSON.stringify(alert).substring(0,50)}</div>
+              </div>
+            `;
+            list.prepend(li); // put alerts at the top
+          });
+        }
       }
     });
   }, 2500);
