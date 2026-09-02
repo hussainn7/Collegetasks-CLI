@@ -36,7 +36,6 @@ async function runScanner(courses) {
       
       if (response.ok) {
         const news = await response.json();
-        // The D2L API typically returns an array of News objects
         if (Array.isArray(news)) {
           news.forEach(item => {
             newAnnouncements.push({
@@ -49,8 +48,12 @@ async function runScanner(courses) {
           });
         }
       } else {
-        sendLog(`[Scanner] API returned ${response.status} for ${course.name}`);
+        sendLog(`[Scanner] API returned ${response.status} for ${course.name} news`);
       }
+
+      // Deep scan modules for hidden assignments
+      await deepScanCourseModules(course);
+      
     } catch (e) {
       sendLog(`[Scanner] Error fetching course ${course.name}: ${e.message}`);
     }
@@ -99,7 +102,10 @@ async function runScanner(courses) {
       anns.forEach(a => processed.add(a.Id));
     }
 
-    chrome.storage.local.set({ processedAnnouncements: Array.from(processed) });
+    chrome.storage.local.set({ 
+      processedAnnouncements: Array.from(processed),
+      lastScanTime: Date.now()
+    });
     sendLog("[Scanner] Scan complete! You are all caught up. 🎉");
   });
 }
@@ -141,3 +147,71 @@ async function sendTelegram(token, chatId, text) {
     console.error("Telegram API error:", e);
   }
 }
+
+async function deepScanCourseModules(course) {
+  sendLog(`[Scanner] Deep scanning modules for ${course.name}...`);
+  try {
+    const response = await fetch(`https://gastate.view.usg.edu/d2l/api/le/1.43/${course.id}/content/toc`);
+    if (!response.ok) return;
+    
+    const toc = await response.json();
+    const hiddenDeadlines = [];
+    
+    // Recursive function to parse modules and topics
+    function parseNodes(nodes) {
+      if (!nodes) return;
+      nodes.forEach(node => {
+        // If it's a topic (Quiz, Dropbox, Discussion) with a DueDate or EndDate
+        if (node.TopicType === 1 || node.TopicType === 3 || node.TypeIdentifier) {
+          const dateStr = node.DueDate || node.EndDate;
+          if (dateStr) {
+            const dateObj = new Date(dateStr);
+            const now = new Date();
+            // Only care about future or recently past deadlines
+            if (dateObj > now - 7 * 24 * 60 * 60 * 1000) {
+              hiddenDeadlines.push({
+                id: node.TopicId || Math.random(),
+                title: node.Title,
+                course: course.name,
+                date: dateObj.toLocaleString(),
+                type: node.TypeIdentifier || 'Module Item'
+              });
+            }
+          }
+        }
+        
+        // Traverse sub-modules
+        if (node.Modules && node.Modules.length > 0) {
+          parseNodes(node.Modules);
+        }
+        
+        // Traverse topics
+        if (node.Topics && node.Topics.length > 0) {
+          parseNodes(node.Topics);
+        }
+      });
+    }
+
+    if (toc.Modules) {
+      parseNodes(toc.Modules);
+    }
+    
+    if (hiddenDeadlines.length > 0) {
+      sendLog(`[Scanner] Found ${hiddenDeadlines.length} hidden module deadlines in ${course.name}`);
+      chrome.storage.local.get({ deepScanDeadlines: [] }, (data) => {
+        let existing = data.deepScanDeadlines || [];
+        // merge and deduplicate
+        hiddenDeadlines.forEach(hd => {
+          if (!existing.find(e => e.id === hd.id)) {
+            existing.push(hd);
+          }
+        });
+        chrome.storage.local.set({ deepScanDeadlines: existing });
+      });
+    }
+
+  } catch (e) {
+    sendLog(`[Scanner] Deep scan error for ${course.name}: ${e.message}`);
+  }
+}
+

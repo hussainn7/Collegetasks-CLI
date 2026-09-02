@@ -121,13 +121,14 @@ initHideClasses();
 // --- Feature 1: What's Due Injector ---
 
 async function scrapeDeadlines() {
+  let deadlines = [];
   try {
     // Attempt to fetch from the actual D2L calendar API
     const response = await fetch('/d2l/api/le/1.43/calendar/events/myEvents/');
     if (response.ok) {
       const data = await response.json();
       if (data && data.length > 0) {
-        return data.map(event => ({
+        deadlines = data.map(event => ({
           id: event.EventId || Math.random(),
           title: event.Title || 'Unknown Event',
           course: event.OrgUnitName || 'General',
@@ -139,12 +140,39 @@ async function scrapeDeadlines() {
     console.warn("Could not fetch actual API, falling back to mock");
   }
 
-  // Fallback if API fails or returns empty
-  return [
-    { id: 1, title: 'Read Chapter 3', course: 'CSC 1302', date: 'Due Tomorrow, 11:59 PM' },
-    { id: 2, title: 'Quiz 2', course: 'MATH 2211', date: 'Due Friday, 5:00 PM' },
-    { id: 3, title: 'Project Draft', course: 'CSC 1302', date: 'Due Next Monday' }
-  ];
+  if (deadlines.length === 0) {
+    deadlines = [
+      { id: 1, title: 'Read Chapter 3', course: 'CSC 1302', date: 'Due Tomorrow, 11:59 PM' },
+      { id: 2, title: 'Quiz 2', course: 'MATH 2211', date: 'Due Friday, 5:00 PM' },
+      { id: 3, title: 'Project Draft', course: 'CSC 1302', date: 'Due Next Monday' }
+    ];
+  }
+  
+  // Merge Deep Scan Deadlines
+  try {
+    const deepScanDeadlines = await new Promise((resolve) => {
+      chrome.storage.local.get({ deepScanDeadlines: [] }, (data) => resolve(data.deepScanDeadlines));
+    });
+    
+    if (deepScanDeadlines && deepScanDeadlines.length > 0) {
+      deepScanDeadlines.forEach(ds => {
+        // Only add if not already in deadlines (naive check by title/course)
+        const exists = deadlines.find(d => d.title === ds.title && d.course === ds.course);
+        if (!exists) {
+          deadlines.push({
+            id: ds.id,
+            title: ds.title + ' (Deep Scan)',
+            course: ds.course,
+            date: ds.date
+          });
+        }
+      });
+    }
+  } catch (e) {
+    console.error("Error merging deep scan deadlines", e);
+  }
+
+  return deadlines;
 }
 
 async function injectWhatsDueUI() {
@@ -159,6 +187,7 @@ async function injectWhatsDueUI() {
     <div class="whats-due-header">
       <h2 style="cursor: pointer; display: flex; align-items: center;" id="icollege-collapse-toggle">
         What's Due <span id="icollege-collapse-icon" style="margin-left: 8px; font-size: 11px;">▼</span>
+        <span id="icollege-alert-badge" style="display:none; margin-left: 8px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 10px; font-weight: bold;"></span>
       </h2>
       <div style="display: flex; gap: 8px;">
         <button id="icollege-scan-btn" class="calendar-btn">Scan Announcements</button>
@@ -213,6 +242,31 @@ async function injectWhatsDueUI() {
     generateAndDownloadICS(deadlines);
   });
   
+  // Try to find the top notifications / alerts badge
+  setTimeout(() => {
+    const alertBtn = document.querySelector('button[aria-label^="Update alerts"], button[id^="d2l-"][aria-label*="alerts"]');
+    if (alertBtn) {
+      // The badge usually has an indicator or aria-label specifies count (e.g., "Update alerts - 2 new alerts")
+      const ariaLabel = alertBtn.getAttribute('aria-label') || '';
+      const match = ariaLabel.match(/(\d+)\s+new/i);
+      const badgeIndicator = alertBtn.querySelector('.d2l-icon-custom, .d2l-navigation-notification-icon, d2l-icon');
+      
+      let count = 0;
+      if (match) {
+        count = parseInt(match[1], 10);
+      } else if (badgeIndicator && !badgeIndicator.hidden && window.getComputedStyle(badgeIndicator).display !== 'none') {
+        // sometimes there's just a dot indicator
+        count = '!';
+      }
+      
+      if (count) {
+        const badgeEl = document.getElementById('icollege-alert-badge');
+        badgeEl.textContent = count + ' Alerts';
+        badgeEl.style.display = 'inline-block';
+      }
+    }
+  }, 2000);
+  
   // Collapse toggle logic
   chrome.storage.local.get(['isPanelFolded'], (data) => {
     const body = document.getElementById('icollege-whats-due-body');
@@ -241,29 +295,43 @@ async function injectWhatsDueUI() {
   });
   
   document.getElementById('icollege-scan-btn').addEventListener('click', () => {
-    const logContainer = document.getElementById('icollege-scanner-logs');
-    logContainer.style.display = 'block';
-    logContainer.innerHTML = '<div><em>Starting scan...</em></div>';
-    
-    // Scrape active courses from dashboard
-    const coursesToScan = [];
-    const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
-    links.forEach(link => {
-      const match = link.getAttribute('href').match(/\/d2l\/home\/(\d+)/);
-      if (match) {
-        // Try to find course text by looking at elements inside the link or parent
-        const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
-        const courseName = rawText.split('\n')[0] || `Course ${match[1]}`;
-        // Ensure we don't push duplicates
-        if (!coursesToScan.find(c => c.id === match[1])) {
-          coursesToScan.push({ id: match[1], name: courseName });
-        }
+    triggerScan();
+  });
+  
+  // Auto-scan on load if on dashboard and cooldown passed
+  if (window.location.href.includes('/d2l/home')) {
+    chrome.storage.local.get(['lastScanTime'], (data) => {
+      const now = Date.now();
+      // 5 minute cooldown
+      if (!data.lastScanTime || (now - data.lastScanTime > 5 * 60 * 1000)) {
+        setTimeout(triggerScan, 2000); // wait for DOM to settle
       }
     });
+  }
+}
 
-    // Send message to background script to trigger manual scan
-    chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan });
+function triggerScan() {
+  const logContainer = document.getElementById('icollege-scanner-logs');
+  if (logContainer) {
+    logContainer.style.display = 'block';
+    logContainer.innerHTML = '<div><em>Starting scan...</em></div>';
+  }
+  
+  // Scrape active courses from dashboard
+  const coursesToScan = [];
+  const links = querySelectorAllShadows('a[href*="/d2l/home/"]');
+  links.forEach(link => {
+    const match = link.getAttribute('href').match(/\/d2l\/home\/(\d+)/);
+    if (match) {
+      const rawText = link.innerText.trim() || link.parentElement.innerText.trim();
+      const courseName = rawText.split('\n')[0] || `Course ${match[1]}`;
+      if (!coursesToScan.find(c => c.id === match[1])) {
+        coursesToScan.push({ id: match[1], name: courseName });
+      }
+    }
   });
+
+  chrome.runtime.sendMessage({ action: 'scan_announcements', courses: coursesToScan });
 }
 
 // Listen for logs from background script
