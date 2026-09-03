@@ -397,85 +397,255 @@ function loadIframeUrl(iframe, url) {
 }
 
 async function physicalScrape(coursesToScan) {
-  if (coursesToScan.length === 0) {
-    logToWidget("[Scraper] No courses to scan.");
-    return;
-  }
-
-  let iframe = document.getElementById('icollege-scraper-frame');
-  if (!iframe) {
-    iframe = document.createElement('iframe');
-    iframe.id = 'icollege-scraper-frame';
-    iframe.style.cssText = 'width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; left: -9999px;';
-    document.body.appendChild(iframe);
-  }
+  logToWidget("[Scraper] Starting physical scan...");
 
   let newAnnouncements = [];
-  let hiddenDeadlines = [];
+  let courseEvents = [];
 
-  for (const course of coursesToScan) {
-    logToWidget(`[Scraper] Physically loading Homepage for ${course.name}...`);
-    
-    // 1. Scrape Announcements (Homepage)
-    await loadIframeUrl(iframe, `https://gastate.view.usg.edu/d2l/home/${course.id}`);
-    await new Promise(r => setTimeout(r, 2000)); // wait for components
-    
-    const doc = iframe.contentDocument || iframe.contentWindow.document;
-    const newsItems = Array.from(querySelectorAllShadows('.d2l-widget-content-padding .d2l-datalist-item, .d2l-widget .vui-list-item, d2l-html-block', doc.body));
-    logToWidget(`[Scraper] Found ${newsItems.length} potential announcement blocks.`);
-    
-    newsItems.forEach(item => {
-      const text = (item.innerText || item.textContent || "").trim();
-      if (text && text.length > 20) {
+  // === PHASE 1: Scrape Notifications Tab (bell icon dropdown) ===
+  logToWidget("[Scraper] Phase 1: Scraping Notifications tab...");
+  try {
+    const notificationData = await scrapeNotifications();
+    if (notificationData.length > 0) {
+      logToWidget(`[Scraper] Found ${notificationData.length} notifications.`);
+      notificationData.forEach(n => {
         newAnnouncements.push({
-          Id: text.substring(0, 40).replace(/[^a-zA-Z0-9]/g, ''), 
-          Title: "Announcement",
-          Body: text.substring(0, 500) + (text.length > 500 ? '...' : ''),
-          Course: course.name,
-          CourseId: course.id
+          Id: n.text.substring(0, 60).replace(/[^a-zA-Z0-9]/g, ''),
+          Title: "Notification",
+          Body: n.text,
+          Course: n.course || "General",
+          CourseId: "notifications"
         });
-      }
-    });
-
-    // 2. Scrape Modules (Content Page)
-    logToWidget(`[Scraper] Physically loading Modules for ${course.name}...`);
-    await loadIframeUrl(iframe, `https://gastate.view.usg.edu/d2l/le/content/${course.id}/Home`);
-    await new Promise(r => setTimeout(r, 3000)); // wait for modules
-    
-    const contentDoc = iframe.contentDocument || iframe.contentWindow.document;
-    
-    // Look for items with due dates (Shadow DOM piercing inside iframe)
-    const modules = querySelectorAllShadows('.d2l-datalist-item, .d2l-collapsepane, li, d2l-list-item', contentDoc.body);
-    let foundDeadlines = 0;
-    
-    modules.forEach(node => {
-      const text = node.innerText || node.textContent || "";
-      // Regex for Due Date: e.g. "Due September 12 at 11:59 PM" or "Due: Sep 12, 11:59 PM"
-      const dateMatch = text.match(/Due\s*(?:Date)?\s*[:-]?\s*([A-Za-z]+\s+\d{1,2}.*?(?:AM|PM))/i);
-      if (dateMatch) {
-         const titleMatch = text.split('\\n')[0].trim();
-         const dateObj = new Date(dateMatch[1]);
-         if (!isNaN(dateObj) && dateObj > new Date() - 7 * 24 * 60 * 60 * 1000) {
-           hiddenDeadlines.push({
-             id: titleMatch.replace(/[^a-zA-Z0-9]/g, '') + dateObj.getTime(),
-             title: titleMatch || 'Unknown Module Item',
-             course: course.name,
-             date: dateObj.toLocaleString(),
-             type: 'Module Item'
-           });
-           foundDeadlines++;
-         }
-      }
-    });
-    logToWidget(`[Scraper] Found ${foundDeadlines} upcoming deadlines via DOM.`);
+      });
+    } else {
+      logToWidget("[Scraper] No notifications found in the bell tab.");
+    }
+  } catch (e) {
+    logToWidget(`[Scraper] Error scraping notifications: ${e.message}`);
   }
 
-  logToWidget(`[Scraper] Physical scan complete. Forwarding to background...`);
+  // === PHASE 2: Scrape Announcements from each course homepage ===
+  if (coursesToScan.length > 0) {
+    logToWidget(`[Scraper] Phase 2: Scraping announcements from ${coursesToScan.length} courses...`);
+    
+    let iframe = document.getElementById('icollege-scraper-frame');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'icollege-scraper-frame';
+      iframe.style.cssText = 'width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; left: -9999px;';
+      document.body.appendChild(iframe);
+    }
+
+    for (const course of coursesToScan) {
+      logToWidget(`[Scraper] Loading homepage for ${course.name}...`);
+      
+      try {
+        await loadIframeUrl(iframe, `https://gastate.view.usg.edu/d2l/home/${course.id}`);
+        await new Promise(r => setTimeout(r, 2500));
+        
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        // Grab all text blocks that look like announcements
+        const newsItems = doc.querySelectorAll('.d2l-htmlblock-untrusted, d2l-html-block, .d2l-datalist-item-content, .d2l-widget-content-padding');
+        logToWidget(`[Scraper] Found ${newsItems.length} content blocks on homepage.`);
+        
+        newsItems.forEach(item => {
+          const text = (item.innerText || item.textContent || "").trim();
+          if (text && text.length > 30) {
+            newAnnouncements.push({
+              Id: (course.id + text.substring(0, 50)).replace(/[^a-zA-Z0-9]/g, ''),
+              Title: "Announcement",
+              Body: text,
+              Course: course.name,
+              CourseId: course.id
+            });
+          }
+        });
+      } catch (e) {
+        logToWidget(`[Scraper] Error loading homepage for ${course.name}: ${e.message}`);
+      }
+    }
+  }
+
+  // === PHASE 3: Scrape "My Course Events" ===
+  logToWidget("[Scraper] Phase 3: Scraping My Course Events...");
+  try {
+    const events = await scrapeCourseEvents();
+    if (events.length > 0) {
+      logToWidget(`[Scraper] Found ${events.length} course events.`);
+      courseEvents = events;
+    } else {
+      logToWidget("[Scraper] No course events found.");
+    }
+  } catch (e) {
+    logToWidget(`[Scraper] Error scraping course events: ${e.message}`);
+  }
+
+  // === PHASE 4: Forward everything to background for Gemini + Telegram ===
+  logToWidget(`[Scraper] Scan complete. ${newAnnouncements.length} items + ${courseEvents.length} events. Sending to background...`);
   chrome.runtime.sendMessage({
     action: 'process_physical_scan',
     announcements: newAnnouncements,
-    deadlines: hiddenDeadlines
+    events: courseEvents
   });
+}
+
+// --- Scrape the Notifications bell dropdown ---
+async function scrapeNotifications() {
+  const results = [];
+  
+  // Find the alerts/notifications button in the top bar
+  const alertBtns = querySelectorAllShadows('button[aria-label*="alert" i], button[aria-label*="notification" i], d2l-navigation-button-notification-icon');
+  logToWidget(`[Scraper] Found ${alertBtns.length} potential notification buttons.`);
+  
+  let alertBtn = null;
+  for (const btn of alertBtns) {
+    // Click to open the dropdown
+    alertBtn = btn;
+    break;
+  }
+  
+  if (!alertBtn) {
+    // Try harder - look for the bell icon area
+    const navBtns = querySelectorAllShadows('d2l-navigation-button-icon');
+    for (const nb of navBtns) {
+      const label = (nb.getAttribute('aria-label') || nb.getAttribute('text') || '').toLowerCase();
+      if (label.includes('alert') || label.includes('notification') || label.includes('update')) {
+        alertBtn = nb;
+        break;
+      }
+    }
+  }
+  
+  if (!alertBtn) {
+    logToWidget("[Scraper] Could not find notification bell button.");
+    return results;
+  }
+  
+  logToWidget("[Scraper] Clicking notification bell...");
+  alertBtn.click();
+  await new Promise(r => setTimeout(r, 1500)); // Wait for dropdown to render
+  
+  // Now scrape the dropdown content
+  // The notifications live inside a datalist; look for all items
+  async function collectItems() {
+    const items = querySelectorAllShadows('.d2l-datalist-item, .d2l-datalist-item-content, d2l-list-item, .d2l-alert-item');
+    items.forEach(item => {
+      const text = (item.innerText || item.textContent || "").trim();
+      if (text && text.length > 10) {
+        // Try to extract a course name from the text (usually in the format "CourseName\nMessage")
+        const lines = text.split('\n').filter(l => l.trim().length > 0);
+        let course = "General";
+        let body = text;
+        
+        // D2L notifications typically show course name on one line, message on another
+        if (lines.length >= 2) {
+          // Check if first line looks like a course (short, no sentence structure)
+          if (lines[0].length < 80 && !lines[0].includes('.')) {
+            course = lines[0].trim();
+            body = lines.slice(1).join(' ').trim();
+          }
+        }
+        
+        // Avoid duplicates
+        if (!results.find(r => r.text === text)) {
+          results.push({ text: body, course: course });
+        }
+      }
+    });
+  }
+  
+  await collectItems();
+  
+  // Try clicking "Load More" repeatedly
+  for (let i = 0; i < 5; i++) {
+    const loadMoreBtns = querySelectorAllShadows('button.d2l-loadmore-pager, button.d2l-button[id*="loadmore"], d2l-pager-load-more');
+    let clicked = false;
+    for (const btn of loadMoreBtns) {
+      const btnText = (btn.innerText || btn.textContent || '').toLowerCase();
+      if (btnText.includes('load more') || btn.classList.contains('d2l-loadmore-pager')) {
+        logToWidget(`[Scraper] Clicking 'Load More' (attempt ${i + 1})...`);
+        btn.click();
+        await new Promise(r => setTimeout(r, 1500));
+        await collectItems();
+        clicked = true;
+        break;
+      }
+    }
+    if (!clicked) break; // No more "Load More" buttons
+  }
+  
+  // Close the dropdown by clicking the bell again
+  alertBtn.click();
+  
+  return results;
+}
+
+// --- Scrape "My Course Events" widget ---
+async function scrapeCourseEvents() {
+  const events = [];
+  
+  // The "My Course Events" section uses a datalist with class vui-list / d2l-datalist
+  // It's on the main dashboard page
+  const eventContainers = querySelectorAllShadows('.d2l-datalist-container, d2l-datalist, .vui-list');
+  
+  for (const container of eventContainers) {
+    // Check if this container is the "course events" one by looking at nearby headings
+    const parent = container.closest('.d2l-widget, .d2l-homepage-widget') || container.parentElement;
+    const heading = parent ? (parent.querySelector('h2, .d2l-widget-header-text, d2l-widget-header') || {}) : {};
+    const headingText = (heading.innerText || heading.textContent || '').toLowerCase();
+    
+    // Only process if it looks like events/calendar widget
+    if (!headingText.includes('event') && !headingText.includes('calendar') && !headingText.includes('due') && !headingText.includes('upcoming')) {
+      continue;
+    }
+    
+    logToWidget(`[Scraper] Found events widget: "${headingText.trim()}"`);
+    
+    const items = container.querySelectorAll('.d2l-datalist-item, li, d2l-list-item');
+    items.forEach(item => {
+      const text = (item.innerText || item.textContent || "").trim();
+      if (text && text.length > 10) {
+        events.push({
+          id: text.substring(0, 50).replace(/[^a-zA-Z0-9]/g, ''),
+          text: text
+        });
+      }
+    });
+  }
+  
+  // If we didn't find it in the DOM widgets, try the iframe approach
+  if (events.length === 0) {
+    logToWidget("[Scraper] Events widget not found on page, trying iframe...");
+    let iframe = document.getElementById('icollege-scraper-frame');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'icollege-scraper-frame';
+      iframe.style.cssText = 'width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; left: -9999px;';
+      document.body.appendChild(iframe);
+    }
+    
+    try {
+      await loadIframeUrl(iframe, 'https://gastate.view.usg.edu/d2l/le/calendar/6606');
+      await new Promise(r => setTimeout(r, 2500));
+      
+      const doc = iframe.contentDocument || iframe.contentWindow.document;
+      const eventItems = doc.querySelectorAll('.d2l-datalist-item, .d2l-le-calendar-event, li, tr');
+      eventItems.forEach(item => {
+        const text = (item.innerText || item.textContent || "").trim();
+        if (text && text.length > 10) {
+          events.push({
+            id: text.substring(0, 50).replace(/[^a-zA-Z0-9]/g, ''),
+            text: text
+          });
+        }
+      });
+      logToWidget(`[Scraper] Found ${events.length} events via calendar page.`);
+    } catch (e) {
+      logToWidget(`[Scraper] Could not load calendar page: ${e.message}`);
+    }
+  }
+  
+  return events;
 }
 
 // Listen for logs from background script
