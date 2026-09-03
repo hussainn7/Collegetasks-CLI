@@ -1,6 +1,11 @@
 import { CONFIG } from './config.js';
 
-// Background Service Worker for iCollege Organizer
+const PRIORITY = { HIGH: "🔴", MEDIUM: "🟡", LOW: "🟢" };
+const CATEGORY = {
+  ASSIGNMENT: "📝", EXAM: "📋", READING: "📖",
+  MEETING: "🤝", SCHEDULE_CHANGE: "📅", LAB: "🔬",
+  PROJECT: "🏗️", OTHER: "📌",
+};
 
 function sendLog(msg) {
   console.log(msg);
@@ -16,100 +21,164 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     processPhysicalScan(request.announcements || [], request.events || [])
       .then(() => sendLog("[Scanner] Background processing finished."))
       .catch(err => sendLog("[Scanner] Error: " + err.message));
-    return true; // keep message channel open for async work
+    return true;
   }
 });
 
 async function processPhysicalScan(newAnnouncements, events) {
   sendLog("[Scanner] Background received data. Processing...");
   sendLog(`[Scanner] Received: ${newAnnouncements.length} announcements/notifications, ${events.length} course events.`);
-  
+
   const data = await chrome.storage.local.get([
     'processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'
   ]);
 
   const processed = new Set(data.processedAnnouncements || []);
   const hidden = new Set(data.hiddenCourses || []);
-  
-  // Filter out already-processed announcements and hidden courses
+
   const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
-  
-  // Build one consolidated text blob with ALL information
-  let allScrapedText = "";
+
+  if (trulyNew.length === 0 && (!events || events.length === 0)) {
+    sendLog("[Scanner] Nothing new to report.");
+    await chrome.storage.local.set({ lastScanTime: Date.now() });
+    sendLog("[Scanner] Done! 🎉");
+    return;
+  }
 
   if (trulyNew.length > 0) {
     sendLog(`[Scanner] ${trulyNew.length} new announcements/notifications to process.`);
-    
-    // Group by course for clarity
-    const grouped = {};
-    trulyNew.forEach(a => {
-      if (!grouped[a.Course]) grouped[a.Course] = [];
-      grouped[a.Course].push(a);
-    });
-    
-    for (const [course, items] of Object.entries(grouped)) {
-      allScrapedText += `\n=== ${course} ===\n`;
-      items.forEach(a => {
-        allScrapedText += `[${a.Title}] ${a.Body}\n\n`;
-      });
-    }
-    
-    // Mark them as processed
     trulyNew.forEach(a => processed.add(a.Id));
   } else {
     sendLog("[Scanner] No new announcements/notifications.");
   }
 
-  // Add course events
-  if (events && events.length > 0) {
-    allScrapedText += `\n=== UPCOMING COURSE EVENTS ===\n`;
-    events.forEach(e => {
-      allScrapedText += `${e.text}\n\n`;
-    });
+  const scrapedText = buildScrapedText(trulyNew, events);
+  let tasks = fallbackTasks(trulyNew, events);
+
+  if (data.geminiKey && scrapedText.trim()) {
+    sendLog("[Scanner] Sending data to Gemini for task extraction...");
+    try {
+      const extracted = await extractTasksWithGemini(scrapedText, data.geminiKey);
+      if (extracted.length > 0) {
+        tasks = extracted;
+        sendLog(`[Scanner] Gemini extracted ${tasks.length} task(s).`);
+      } else {
+        sendLog("[Scanner] Gemini found no tasks — using local format.");
+      }
+    } catch (e) {
+      sendLog(`[Scanner] Gemini error: ${e.message}. Using local format.`);
+    }
+  } else if (!data.geminiKey) {
+    sendLog("[Scanner] No Gemini key — formatting locally.");
   }
 
-  // If we have any text at all, process it
-  if (allScrapedText.trim().length > 0) {
-    let finalMessage = allScrapedText;
-    
-    if (data.geminiKey) {
-      sendLog("[Scanner] Sending all data to Gemini for To-Do list...");
-      try {
-        finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
-        sendLog("[Scanner] Gemini To-Do list received.");
-      } catch (e) {
-        sendLog(`[Scanner] Gemini error: ${e.message}. Sending raw text.`);
+  if (data.tgChatId && tasks.length > 0) {
+    sendLog("[Scanner] Sending to Telegram...");
+    try {
+      const message = formatTaskMessage(tasks);
+      const chunks = splitMessage(message, 3800);
+      for (const chunk of chunks) {
+        await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, chunk);
       }
-    } else {
-      sendLog("[Scanner] No Gemini key set — sending raw text instead.");
+      sendLog("[Scanner] ✅ Telegram notification sent!");
+    } catch (e) {
+      sendLog(`[Scanner] Telegram error: ${e.message}`);
     }
-    
-    if (data.tgChatId) {
-      sendLog("[Scanner] Sending to Telegram...");
-      try {
-        // Telegram has a 4096 char limit — split if needed
-        const chunks = splitMessage(finalMessage, 3800);
-        for (let i = 0; i < chunks.length; i++) {
-          const prefix = i === 0 ? "🚨 *iCollege Update*\n\n" : "";
-          await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, prefix + chunks[i]);
-        }
-        sendLog("[Scanner] ✅ Telegram notification sent!");
-      } catch (e) {
-        sendLog(`[Scanner] Telegram error: ${e.message}`);
-      }
-    } else {
-      sendLog("[Scanner] ⚠️ No Telegram Chat ID set. Cannot send.");
-    }
-  } else {
-    sendLog("[Scanner] Nothing new to report.");
+  } else if (!data.tgChatId) {
+    sendLog("[Scanner] ⚠️ No Telegram Chat ID set. Cannot send.");
   }
 
-  await chrome.storage.local.set({ 
+  await chrome.storage.local.set({
     processedAnnouncements: Array.from(processed),
     lastScanTime: Date.now()
   });
-  
+
   sendLog("[Scanner] Done! 🎉");
+}
+
+function buildScrapedText(announcements, events) {
+  let text = "";
+  const grouped = {};
+  announcements.forEach(a => {
+    if (!grouped[a.Course]) grouped[a.Course] = [];
+    grouped[a.Course].push(a);
+  });
+  for (const [course, items] of Object.entries(grouped)) {
+    text += `\n=== ${course} ===\n`;
+    items.forEach(a => { text += `[${a.Title}] ${a.Body}\n\n`; });
+  }
+  if (events && events.length > 0) {
+    text += `\n=== UPCOMING COURSE EVENTS ===\n`;
+    events.forEach(e => { text += `${e.text}\n\n`; });
+  }
+  return text;
+}
+
+function fallbackTasks(announcements, events) {
+  const tasks = [];
+  announcements.forEach(a => {
+    tasks.push({
+      course: a.Course || "General",
+      task: oneLine(a.Body || a.Title),
+      deadline: extractDeadline(a.Body || ""),
+      priority: "MEDIUM",
+      category: "OTHER",
+    });
+  });
+  (events || []).forEach(e => {
+    tasks.push({
+      course: "Upcoming",
+      task: oneLine(e.text),
+      deadline: extractDeadline(e.text || ""),
+      priority: "MEDIUM",
+      category: "OTHER",
+    });
+  });
+  return tasks;
+}
+
+function oneLine(text) {
+  const line = (text || "").split("\n").map(l => l.trim()).find(l => l.length > 3) || "Update";
+  const cleaned = line.replace(/\s+/g, " ").trim();
+  return cleaned.length > 90 ? cleaned.slice(0, 87) + "…" : cleaned;
+}
+
+function extractDeadline(text) {
+  const m = (text || "").match(/\b(?:due|deadline|by)\b[:\s]+(.{3,40}?)(?:\.|$)/i);
+  return m ? m[1].trim() : "";
+}
+
+function formatTaskMessage(tasks) {
+  const lines = ["📋 <b>iCollege Tasks</b>", ""];
+  let current = null;
+
+  for (const t of tasks) {
+    const course = t.course || "General";
+    if (course !== current) {
+      current = course;
+      lines.push("━━━━━━━━━━━━━━━━━━━━");
+      lines.push(`📚 <b>${escapeHtml(course)}</b>`);
+      lines.push("");
+    }
+
+    const p = PRIORITY[t.priority] || "⚪";
+    const c = CATEGORY[t.category] || "📌";
+    lines.push(`${p}${c} <b>${escapeHtml(t.task)}</b>`);
+
+    const due = t.deadline ? escapeHtml(t.deadline) : "No deadline";
+    const pri = escapeHtml(t.priority || "MEDIUM");
+    lines.push(`      📅 ${due} · ${pri}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function splitMessage(text, maxLen) {
@@ -121,47 +190,86 @@ function splitMessage(text, maxLen) {
       chunks.push(remaining);
       break;
     }
-    // Try to split at a newline
-    let splitIdx = remaining.lastIndexOf('\n', maxLen);
-    if (splitIdx < maxLen / 2) splitIdx = maxLen; // fallback
+    let splitIdx = remaining.lastIndexOf("\n", maxLen);
+    if (splitIdx < maxLen / 2) splitIdx = maxLen;
     chunks.push(remaining.substring(0, splitIdx));
     remaining = remaining.substring(splitIdx);
   }
   return chunks;
 }
 
-async function summarizeWithGemini(text, apiKey) {
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+async function extractTasksWithGemini(text, apiKey) {
+  const prompt = `You extract student tasks from iCollege (D2L) announcements and events.
+
+Return ONLY valid JSON, no markdown:
+{"tasks":[{"course":"","task":"","deadline":"","priority":"HIGH|MEDIUM|LOW","category":"ASSIGNMENT|EXAM|READING|MEETING|SCHEDULE_CHANGE|LAB|PROJECT|OTHER"}]}
+
+Rules:
+- task is one short line: what the student must do
+- deadline is the due date if mentioned, else empty string
+- HIGH = exams / major work / due within 3 days
+- skip purely informational noise
+- if nothing actionable: {"tasks":[]}
+
+Text:
+${text}`;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: "Extract all tasks, assignments, and important actionable information from the following text and create a concise, structured To-Do list. Format it clearly with bullet points and bold text for course names. Do not write a long paragraph. If there is nothing actionable, just summarize the updates briefly.\n\n" + text }] }]
-      })
-    });
-    const result = await response.json();
-    if (result.candidates && result.candidates.length > 0) {
-      return result.candidates[0].content.parts[0].text.trim();
-    } else {
-      console.error("Gemini returned unexpected format:", result);
-      return text;
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 },
+      }),
     }
-  } catch (e) {
-    console.error("Gemini API error:", e);
-    return text;
+  );
+  const result = await response.json();
+  if (!result.candidates || !result.candidates.length) {
+    throw new Error(result.error?.message || "Gemini returned no candidates");
   }
+
+  const raw = result.candidates[0].content.parts[0].text.trim();
+  const parsed = parseJson(raw);
+  if (!parsed || !Array.isArray(parsed.tasks)) return [];
+
+  return parsed.tasks
+    .filter(t => t && t.task)
+    .map(t => ({
+      course: t.course || "General",
+      task: String(t.task).trim(),
+      deadline: String(t.deadline || "").trim(),
+      priority: String(t.priority || "MEDIUM").toUpperCase(),
+      category: String(t.category || "OTHER").toUpperCase(),
+    }));
+}
+
+function parseJson(text) {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = fence ? fence[1] : text;
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    const brace = candidate.match(/\{[\s\S]*\}/);
+    if (brace) {
+      try { return JSON.parse(brace[0]); } catch (__) {}
+    }
+  }
+  return null;
 }
 
 async function sendTelegram(token, chatId, text) {
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
         text: text,
-        parse_mode: 'Markdown'
-      })
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
     });
     const json = await res.json();
     if (!json.ok) {
