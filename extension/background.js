@@ -13,81 +13,95 @@ function sendLog(msg) {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'process_physical_scan') {
-    processPhysicalScan(request.announcements || [], request.deadlines || [])
+    processPhysicalScan(request.announcements || [], request.events || [])
       .then(() => sendLog("[Scanner] Background processing finished."))
       .catch(err => sendLog("[Scanner] Error: " + err.message));
     return true; // keep message channel open for async work
   }
 });
 
-async function processPhysicalScan(newAnnouncements, hiddenDeadlines) {
+async function processPhysicalScan(newAnnouncements, events) {
   sendLog("[Scanner] Background received data. Processing...");
+  sendLog(`[Scanner] Received: ${newAnnouncements.length} announcements/notifications, ${events.length} course events.`);
   
-  // Use Promise form (no callback) so await actually works in MV3
   const data = await chrome.storage.local.get([
-    'processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId', 'deepScanDeadlines'
+    'processedAnnouncements', 'hiddenCourses', 'geminiKey', 'tgChatId'
   ]);
 
   const processed = new Set(data.processedAnnouncements || []);
   const hidden = new Set(data.hiddenCourses || []);
   
+  // Filter out already-processed announcements and hidden courses
   const trulyNew = newAnnouncements.filter(a => !processed.has(a.Id) && !hidden.has(`/d2l/home/${a.CourseId}`));
   
+  // Build one consolidated text blob with ALL information
   let allScrapedText = "";
 
   if (trulyNew.length > 0) {
-    sendLog(`[Scanner] Found ${trulyNew.length} new announcements!`);
-    allScrapedText += "--- NEW ANNOUNCEMENTS ---\n";
-    trulyNew.forEach(a => {
-      allScrapedText += `Course: ${a.Course}\nText: ${a.Body}\n\n`;
-      processed.add(a.Id);
-    });
-  } else {
-    sendLog("[Scanner] No new announcements found.");
-  }
-
-  // Process Deadlines
-  let existingDeadlines = data.deepScanDeadlines || [];
-  let trulyNewDeadlines = [];
-  if (hiddenDeadlines.length > 0) {
-    hiddenDeadlines.forEach(hd => {
-      if (!existingDeadlines.find(e => e.id === hd.id)) {
-        existingDeadlines.push(hd);
-        trulyNewDeadlines.push(hd);
-      }
-    });
-    await chrome.storage.local.set({ deepScanDeadlines: existingDeadlines });
-    sendLog(`[Scanner] Saved ${hiddenDeadlines.length} physical deadlines.`);
+    sendLog(`[Scanner] ${trulyNew.length} new announcements/notifications to process.`);
     
-    if (trulyNewDeadlines.length > 0) {
-      allScrapedText += "--- NEW UPCOMING DEADLINES ---\n";
-      trulyNewDeadlines.forEach(d => {
-        allScrapedText += `Course: ${d.course}\nTask: ${d.title}\nDue: ${d.date}\n\n`;
+    // Group by course for clarity
+    const grouped = {};
+    trulyNew.forEach(a => {
+      if (!grouped[a.Course]) grouped[a.Course] = [];
+      grouped[a.Course].push(a);
+    });
+    
+    for (const [course, items] of Object.entries(grouped)) {
+      allScrapedText += `\n=== ${course} ===\n`;
+      items.forEach(a => {
+        allScrapedText += `[${a.Title}] ${a.Body}\n\n`;
       });
     }
+    
+    // Mark them as processed
+    trulyNew.forEach(a => processed.add(a.Id));
+  } else {
+    sendLog("[Scanner] No new announcements/notifications.");
   }
 
-  // If we have any new data, send a consolidated To-Do list
+  // Add course events
+  if (events && events.length > 0) {
+    allScrapedText += `\n=== UPCOMING COURSE EVENTS ===\n`;
+    events.forEach(e => {
+      allScrapedText += `${e.text}\n\n`;
+    });
+  }
+
+  // If we have any text at all, process it
   if (allScrapedText.trim().length > 0) {
     let finalMessage = allScrapedText;
     
     if (data.geminiKey) {
-      sendLog("[Scanner] Generating To-Do list with Gemini...");
-      finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
-      sendLog("[Scanner] Gemini response received.");
+      sendLog("[Scanner] Sending all data to Gemini for To-Do list...");
+      try {
+        finalMessage = await summarizeWithGemini(allScrapedText, data.geminiKey);
+        sendLog("[Scanner] Gemini To-Do list received.");
+      } catch (e) {
+        sendLog(`[Scanner] Gemini error: ${e.message}. Sending raw text.`);
+      }
     } else {
-      sendLog("[Scanner] No Gemini key set, sending raw text.");
+      sendLog("[Scanner] No Gemini key set — sending raw text instead.");
     }
     
     if (data.tgChatId) {
-      sendLog("[Scanner] Sending Telegram To-Do list...");
-      await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, `🚨 *New Updates from iCollege!*\n\n${finalMessage}`);
-      sendLog("[Scanner] ✅ Telegram notification sent successfully!");
+      sendLog("[Scanner] Sending to Telegram...");
+      try {
+        // Telegram has a 4096 char limit — split if needed
+        const chunks = splitMessage(finalMessage, 3800);
+        for (let i = 0; i < chunks.length; i++) {
+          const prefix = i === 0 ? "🚨 *iCollege Update*\n\n" : "";
+          await sendTelegram(CONFIG.TELEGRAM_BOT_TOKEN, data.tgChatId, prefix + chunks[i]);
+        }
+        sendLog("[Scanner] ✅ Telegram notification sent!");
+      } catch (e) {
+        sendLog(`[Scanner] Telegram error: ${e.message}`);
+      }
     } else {
-      sendLog("[Scanner] ⚠️ Telegram Chat ID not set! Cannot send notification.");
+      sendLog("[Scanner] ⚠️ No Telegram Chat ID set. Cannot send.");
     }
   } else {
-    sendLog("[Scanner] Nothing new to report this scan.");
+    sendLog("[Scanner] Nothing new to report.");
   }
 
   await chrome.storage.local.set({ 
@@ -95,7 +109,25 @@ async function processPhysicalScan(newAnnouncements, hiddenDeadlines) {
     lastScanTime: Date.now()
   });
   
-  sendLog("[Scanner] Physical scan and sync complete! 🎉");
+  sendLog("[Scanner] Done! 🎉");
+}
+
+function splitMessage(text, maxLen) {
+  if (text.length <= maxLen) return [text];
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+    // Try to split at a newline
+    let splitIdx = remaining.lastIndexOf('\n', maxLen);
+    if (splitIdx < maxLen / 2) splitIdx = maxLen; // fallback
+    chunks.push(remaining.substring(0, splitIdx));
+    remaining = remaining.substring(splitIdx);
+  }
+  return chunks;
 }
 
 async function summarizeWithGemini(text, apiKey) {
