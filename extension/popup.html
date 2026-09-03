@@ -94,7 +94,11 @@
 
   <div class="form-group">
     <label>Gemini API Key (For Summaries)</label>
-    <input type="password" id="geminiKey" placeholder="AIzaSy..." />
+    <div style="display: flex; gap: 6px; align-items: center;">
+      <input type="password" id="geminiKey" placeholder="AIzaSy..." style="flex: 1;" />
+      <button id="testGeminiBtn" style="width: auto; padding: 8px 10px; font-size: 11px; background: #10b981; flex-shrink: 0;">Test</button>
+    </div>
+    <div id="geminiStatus" style="font-size: 11px; margin-top: 5px; min-height: 16px;"></div>
   </div>
 
   <div class="form-group" style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">

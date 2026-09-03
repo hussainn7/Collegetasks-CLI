@@ -34,6 +34,43 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Test Gemini key
+  document.getElementById('testGeminiBtn').addEventListener('click', async () => {
+    const key = document.getElementById('geminiKey').value.trim();
+    const statusEl = document.getElementById('geminiStatus');
+    if (!key) {
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = 'Enter a key first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Testing…';
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: 'Say "OK" only.' }] }] }),
+        }
+      );
+      const json = await res.json();
+      if (json.candidates && json.candidates.length > 0) {
+        statusEl.style.color = '#10b981';
+        statusEl.textContent = '✓ Key works!';
+      } else if (json.error) {
+        statusEl.style.color = '#ef4444';
+        statusEl.textContent = '✗ ' + json.error.message;
+      } else {
+        statusEl.style.color = '#ef4444';
+        statusEl.textContent = '✗ Unexpected response';
+      }
+    } catch (e) {
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = '✗ ' + e.message;
+    }
+  });
+
   // Clear DB
   document.getElementById('clearDbBtn').addEventListener('click', () => {
     chrome.storage.local.remove('processedAnnouncements', () => {
