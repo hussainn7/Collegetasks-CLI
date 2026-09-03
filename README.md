@@ -23,7 +23,7 @@ python main.py courses
 python main.py scan
 
 # 6. Scan specific courses only
-python main.py scan --courses "CSC 1302,MATH 2211"
+python main.py scan --courses "CALCULUS OF ONE VARIABLE I XLS Group AMA28 Fall Semester 2026"
 ```
 
 ## Configuration
